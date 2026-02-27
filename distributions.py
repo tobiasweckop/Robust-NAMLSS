@@ -1,5 +1,3 @@
-from asyncio import log
-
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -29,8 +27,19 @@ class Normal(Distribution):
         return mu, sigma
 
     @classmethod
-    def loss(cls, parameters, y):
-        print("loss")
+    def nll_loss(cls, parameters, y, c = None):
+
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+
+        normal_dist = torch_normal(mu, sigma)
+        log_likelihood = normal_dist.log_prob(y)
+
+        if c is not None:
+            log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
+
+        nll = -log_likelihood.mean()
+        return nll
 
     @classmethod
     def get_param_count(cls):
@@ -84,7 +93,7 @@ class Gamma(Distribution):
 
 
 
-class bccg(Distribution):
+class BCCG(Distribution):
 
     @classmethod
     def get_param_count(cls):
