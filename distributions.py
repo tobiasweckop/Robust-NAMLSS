@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from scipy import stats
 import torch.nn.functional as F
 from torch.distributions import Gamma as torch_gamma
 from torch.distributions import Normal as torch_normal
@@ -21,10 +22,18 @@ class Distribution:
 class Normal(Distribution):
 
     @classmethod
-    def transform(cls, parameters):
-        mu = parameters[:, 0]
-        sigma = parameters[:, 1]
-        return mu, sigma
+    def get_param_count(cls):
+        return 2
+
+    @classmethod
+    def transform(cls, parameter_tensor):
+
+        mu = parameter_tensor[:, :, 0]
+        sigma = F.softplus(parameter_tensor[:, :, 1])
+
+        transformed_tensor = torch.stack([mu, sigma], dim=2)
+
+        return transformed_tensor
 
     @classmethod
     def nll_loss(cls, parameters, y, c = None):
@@ -42,9 +51,29 @@ class Normal(Distribution):
         return nll
 
     @classmethod
-    def get_param_count(cls):
-        return 2
+    def cdf(cls, parameters, y):
 
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+
+        normal_dist = torch_normal(mu, sigma)
+        y_cdf = normal_dist.cdf(y).squeeze()
+
+        return y_cdf
+
+    @classmethod
+    def icdf(cls, parameters, p):
+
+        if not isinstance(p, torch.Tensor):
+            p = torch.tensor(p)
+
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+
+        normal_dist = torch_normal(mu, sigma)
+        y_icdf = normal_dist.icdf(p).squeeze()
+
+        return y_icdf
 
 
 class Gamma(Distribution):
@@ -54,9 +83,10 @@ class Gamma(Distribution):
         return 2
 
     @classmethod
-    def transform(cls, stacked_tensor):
-        alpha = stacked_tensor[:, :, 0]
-        theta = stacked_tensor[:, :, 1]
+    def transform(cls, parameter_tensor):
+
+        alpha = parameter_tensor[:, :, 0]
+        theta = parameter_tensor[:, :, 1]
 
         alpha = F.softplus(alpha)
         theta = F.softplus(theta)
@@ -90,6 +120,20 @@ class Gamma(Distribution):
         y_cdf = dist.cdf(y).squeeze()
 
         return y_cdf
+    
+    @classmethod
+    def icdf(cls, parameter_tensor, p):
+
+        if not isinstance(p, torch.Tensor):
+            p = torch.tensor(p)
+
+        alpha = parameter_tensor[:, 0]
+        theta = parameter_tensor[:, 1]
+
+        y_icdf = stats.gamma.ppf(p, a = alpha, scale = theta)
+        y_icdf = torch.tensor(y_icdf).squeeze()
+
+        return y_icdf
 
 
 
@@ -100,10 +144,11 @@ class BCCG(Distribution):
         return 3
     
     @classmethod
-    def transform(cls, stacked_tensor):
-        mu = stacked_tensor[:, :, 0]
-        sigma = stacked_tensor[:, :, 1]
-        nu = stacked_tensor[:, :, 2]
+    def transform(cls, parameter_tensor):
+
+        mu = parameter_tensor[:, :, 0]
+        sigma = parameter_tensor[:, :, 1]
+        nu = parameter_tensor[:, :, 2]
 
         mu = F.softplus(mu)
         sigma = F.softplus(sigma)
@@ -148,6 +193,9 @@ class BCCG(Distribution):
     @classmethod
     def icdf(cls, parameter_tensor, p):
 
+        if not isinstance(p, torch.Tensor):
+            p = torch.tensor(p)
+
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
         nu = parameter_tensor[:, 2]
@@ -158,3 +206,4 @@ class BCCG(Distribution):
         y_icdf = torch.where(nu == 0, mu * torch.exp(sigma * z), mu * (1 + sigma * nu * z)**(1/nu))
 
         return y_icdf
+    
