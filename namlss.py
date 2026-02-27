@@ -108,14 +108,33 @@ class NAMLSS(nn.Module):
             if y_val.dim() == 2 and y_val.size(1) == 1:
                 y_val = y_val.squeeze(1)
 
-        return X_train, y_train, X_val, y_val, c
+        X_train_standardized, X_val_standardized = self._standardize_covariates(X_train, X_val)
+
+        return X_train_standardized, y_train, X_val_standardized, y_val, c
+
+
+    def _standardize_covariates(self, X_train, X_val = None):
+
+        # Standardize X_train and y_train
+        self.X_mean = X_train.mean(dim=0)
+        self.X_std = X_train.std(dim=0) + 1e-8  # Add small value to prevent division by zero
+
+        X_train_standardized = (X_train - self.X_mean) / self.X_std
+
+        # Standardize X_val and y_val using training statistics
+        if X_val is not None:
+            X_val_standardized = (X_val - self.X_mean) / self.X_std
+        else:
+            X_val_standardized = None
+
+        return X_train_standardized, X_val_standardized
 
 
     def _snapshot_model_state(self):
         return {key : value.detach().clone() for key, value in self.state_dict().items()}
 
 
-    def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 1e-3, weight_decay = 0.0, 
+    def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
             early_stopping_patience = 10, c = None, starting_weights = None, verbose = False):
 
         X_train, y_train, X_val, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val, starting_weights, c)
@@ -226,6 +245,9 @@ class NAMLSS(nn.Module):
     def predict(self, X):
         if X.dim() == 1:
             X = X.unsqueeze(1)
+
+        # apply the same scaling as during training
+        X = (X - self.X_mean) / self.X_std
 
         self.eval()
         with torch.no_grad():
