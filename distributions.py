@@ -101,7 +101,7 @@ class Gamma(Distribution):
         alpha = parameter_tensor[:, 0]
         theta = parameter_tensor[:, 1]
 
-        gamma_dist = torch_gamma(alpha, 1/theta)                  # Note: Pytorch Gamma uses shape and rate (1/scale)
+        gamma_dist = torch_gamma(alpha, 1/theta) # Note: Pytorch Gamma uses shape and rate (1/theta)
         log_likelihood = gamma_dist.log_prob(y)
 
         if c is not None:
@@ -136,8 +136,9 @@ class Gamma(Distribution):
         return y_icdf
 
 
-
 class BCCG(Distribution):
+
+    standard_normal = torch_normal(0, 1)
 
     @classmethod
     def get_param_count(cls):
@@ -158,25 +159,6 @@ class BCCG(Distribution):
 
         return transformed_tensor
 
-    # @classmethod
-    # def nll_loss(cls, parameter_tensor, y, c = None):
-        
-    #     mu = parameter_tensor[:, 0]
-    #     sigma = parameter_tensor[:, 1]
-    #     nu = parameter_tensor[:, 2]
-        
-    #     normal = torch_normal(0, 1)
-    #     z = torch.where(nu == 0, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
-
-    #     log_likelihood = (nu - 1) * torch.log(y) - 1/2 * z**2 - nu * torch.log(mu) - torch.log(sigma) - 1/2 * torch.log(torch.tensor(2*torch.pi)) - torch.log(normal.cdf(1/(sigma * torch.abs(nu))))
-
-    #     if c is not None:
-    #         log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
-        
-    #     nll = -log_likelihood.mean()
-    #     return nll
-
-
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
 
@@ -194,7 +176,7 @@ class BCCG(Distribution):
         nu = torch.clamp(nu, min = -10.0, max = 10.0)
 
         # Compute log-likelihood
-        normal = torch_normal(0, 1)
+         
         z = torch.where(nu == 0, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
 
         log_likelihood = ((nu - 1) * torch.log(y) 
@@ -202,15 +184,13 @@ class BCCG(Distribution):
                           - nu * torch.log(mu) 
                           - torch.log(sigma) 
                           - 1/2 * torch.log(torch.tensor(2*torch.pi)) 
-                          - torch.log(normal.cdf(1/(sigma * torch.where(torch.abs(nu) < 1e-6, torch.tensor(1e-6), torch.abs(nu))))))
+                          - torch.log(cls.standard_normal.cdf(1/(sigma * torch.where(torch.abs(nu) < 1e-6, torch.tensor(torch.sign(nu) * 1e-6), torch.abs(nu))))))
 
         if c is not None:
             log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
         
         nll = -log_likelihood.mean()
         return nll
-
-
 
     @classmethod
     def cdf(cls, parameter_tensor, y):
