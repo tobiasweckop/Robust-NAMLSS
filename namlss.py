@@ -39,6 +39,9 @@ class NAMLSS(nn.Module):
 
             return default_formula
         
+        else: 
+            return formula
+        
 
     def _parse_formula(self, formula):
 
@@ -88,7 +91,7 @@ class NAMLSS(nn.Module):
         return parameter_estimate_tensor
 
 
-    def _prepare_inputs(self, X_train, y_train, X_val=None, y_val=None, starting_weights=None, c=None):
+    def _prepare_inputs(self, X_train, y_train, X_val = None, y_val = None, starting_weights = None, c = None):
 
         # Load starting weights if provided
         if starting_weights is not None:
