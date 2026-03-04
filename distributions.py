@@ -160,7 +160,7 @@ class BCCG(Distribution):
         return transformed_tensor
 
     @classmethod
-    def nll_loss(cls, parameter_tensor, y, c=None):
+    def nll_loss(cls, parameter_tensor, y, c = None):
 
         eps = 1e-6
 
@@ -169,37 +169,26 @@ class BCCG(Distribution):
         sigma = parameter_tensor[:, 1]
         nu = parameter_tensor[:, 2]
 
-        # Clamp to avoid invalid operations
-        y = torch.clamp(y, min=eps)
-        mu = torch.clamp(mu, min=eps)
-        sigma = torch.clamp(sigma, min=eps)
-        nu = torch.clamp(nu, min=-10.0, max=10.0)
+        # Prevent numerically unstable values
+        y = torch.clamp(y, min = eps)
+        mu = torch.clamp(mu, min = eps)
+        sigma = torch.clamp(sigma, min = eps)
+        nu = torch.clamp(nu, min = -10.0, max = 10.0)
 
-        # Safe nu for computation
-        nu_safe = torch.where(torch.abs(nu) < eps, eps * torch.sign(nu), nu)
-
-        # z computation (Taylor approximation for nu ~ 0)
-        z = (1/(sigma * nu_safe)) * ((y / mu) ** nu_safe - 1)
-
-        # For very small nu, use first-order Taylor: (y/mu)^nu - 1 ≈ nu * log(y/mu)
-        small_nu_mask = torch.abs(nu) < eps
-        z[small_nu_mask] = (1 / sigma[small_nu_mask]) * torch.log(y[small_nu_mask] / mu[small_nu_mask])
-
-        # CDF argument (safe)
-        cdf_arg = 1 / (sigma * torch.abs(nu_safe))
-        cdf_val = torch.clamp(cls.standard_normal.cdf(cdf_arg), min=1e-12)
+        # Compute log-likelihood
+         
+        z = torch.where(nu == 0, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
 
         log_likelihood = ((nu - 1) * torch.log(y) 
-                        - 0.5 * z**2
-                        - nu * torch.log(mu)
-                        - torch.log(sigma)
-                        - 0.5 * torch.log(torch.tensor(2*torch.pi))
-                        - torch.log(cdf_val))
+                          - 1/2 * z**2 
+                          - nu * torch.log(mu) 
+                          - torch.log(sigma) 
+                          - 1/2 * torch.log(torch.tensor(2*torch.pi)) 
+                          - torch.log(cls.standard_normal.cdf(1/(sigma * torch.where(torch.abs(nu) < 1e-6, torch.tensor(torch.sign(nu) * 1e-6), torch.abs(nu))))))
 
         if c is not None:
-            # Safe version of log-sigmoid transformation
-            log_likelihood = torch.log1p(torch.exp(log_likelihood + c)) - torch.log1p(torch.exp(c))
-
+            log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
+        
         nll = -log_likelihood.mean()
         return nll
 
