@@ -6,7 +6,7 @@ from distributions import Distribution
 
 class NAMLSS(nn.Module):
 
-    def __init__(self, formula = None, n_covariates = None, distribution = None, hidden_size = 8):
+    def __init__(self, formula = None, n_covariates = None, distribution = None, numeric_mask = None, hidden_size = 8):
 
         # initialize nn.Module
         super(NAMLSS, self).__init__()
@@ -16,6 +16,7 @@ class NAMLSS(nn.Module):
         self.formula = self._check_formula(formula, n_covariates)
         self.terms = self._parse_formula(self.formula)
         self.module_dict = self._build_modules(self.terms, hidden_size, self.distribution.get_param_count())
+        self.numeric_mask = numeric_mask
     
 
     def _resolve_distribution(self, distribution):
@@ -115,15 +116,26 @@ class NAMLSS(nn.Module):
 
     def _standardize_covariates(self, X_train, X_val = None):
 
-        # Standardize X_train and y_train
-        self.X_mean = X_train.mean(dim=0)
-        self.X_std = X_train.std(dim=0) + 1e-8  # Add small value to prevent division by zero
+        if self.numeric_mask is None:
+            self.numeric_mask = torch.ones(X_train.shape[1], dtype=torch.bool)
 
-        X_train_standardized = (X_train - self.X_mean) / self.X_std
+        mask = self.numeric_mask
+
+        # Initialize mean/std for all columns
+        self.X_mean = torch.zeros(X_train.shape[1], device = X_train.device, dtype = X_train.dtype)
+        self.X_std = torch.ones(X_train.shape[1], device = X_train.device, dtype = X_train.dtype)        
+
+        # Compute statistics ONLY on numeric columns
+        self.X_mean[mask] = X_train[:, mask].mean(dim=0)
+        self.X_std[mask] = X_train[:, mask].std(dim=0) + 1e-8 # add small constant to prevent division by zero
+
+        X_train_standardized = X_train.clone()
+        X_train_standardized[:, mask] = (X_train[:, mask] - self.X_mean[mask]) / self.X_std[mask]
 
         # Standardize X_val and y_val using training statistics
         if X_val is not None:
-            X_val_standardized = (X_val - self.X_mean) / self.X_std
+            X_val_standardized = X_val.clone()
+            X_val_standardized[:, mask] = (X_val[:, mask] - self.X_mean[mask]) / self.X_std[mask]
         else:
             X_val_standardized = None
 
@@ -198,9 +210,7 @@ class NAMLSS(nn.Module):
             candidate_list = [None] + [6] + np.round(np.arange(5.1, 2, -0.1),1).tolist() + [1, 0]  # creates list of penalties to test
 
         best_mse = float("inf")
-        state_dict = None
 
-        # TODO: see, if using self instead of a new instance has any disadvantages
         candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__)
 
         for candidate in candidate_list:
@@ -234,10 +244,6 @@ class NAMLSS(nn.Module):
                 best_state_dict = candidate_model._snapshot_model_state()
 
         print(f"best penalty identified as c = {best_penalty}")
-        # self.fit(X_train, y_train, X_val, y_val, c = best_penalty, starting_weights = best_state_dict, verbose = False) # Note: This was necessary because of a bug with best_state_dict
-        # print(f"Model refitted with best penalty c = {best_penalty}.")
-        # Hopefully this is not necessary anymore and we can just load the best state dict now.
-        # If this creates bugs, just go back to self.fit()
         self.load_state_dict(best_state_dict)
         print(f"Best performing model state loaded.")
 
@@ -247,7 +253,9 @@ class NAMLSS(nn.Module):
             X = X.unsqueeze(1)
 
         # apply the same scaling as during training
-        X = (X - self.X_mean) / self.X_std
+        mask = self.numeric_mask
+        X = X.clone()
+        X[:, mask] = (X[:, mask] - self.X_mean[mask]) / self.X_std[mask]
 
         self.eval()
         with torch.no_grad():
