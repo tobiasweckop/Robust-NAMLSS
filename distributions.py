@@ -174,18 +174,20 @@ class BCCG(Distribution):
         mu = torch.clamp(mu, min = eps)
         sigma = torch.clamp(sigma, min = eps)
         nu = torch.clamp(nu, min = -10.0, max = 10.0)
+        nu = torch.where(abs(nu) <= eps, eps, nu)
 
-        # Compute log-likelihood
-         
-        z = torch.where(nu == 0, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
+        # Correct z, if nu is too close to zero
+        z = torch.where(abs(nu) <= eps, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
+
+        standard_normal_term = cls.standard_normal.cdf(1/(sigma * torch.where(torch.abs(nu) < eps, eps, torch.abs(nu))))
 
         log_likelihood = ((nu - 1) * torch.log(y) 
                           - 1/2 * z**2 
                           - nu * torch.log(mu) 
                           - torch.log(sigma) 
                           - 1/2 * torch.log(torch.tensor(2*torch.pi)) 
-                          - torch.log(cls.standard_normal.cdf(1/(sigma * torch.where(torch.abs(nu) < 1e-6, torch.tensor(torch.sign(nu) * 1e-6), torch.abs(nu))))))
-
+                          - torch.log(standard_normal_term))
+        
         if c is not None:
             log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
         
