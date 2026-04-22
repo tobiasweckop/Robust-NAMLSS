@@ -76,6 +76,66 @@ class Normal(Distribution):
         return y_icdf
 
 
+class LogNormal(Distribution):
+
+    standard_normal = torch_normal(0, 1)
+
+    @classmethod
+    def get_param_count(cls):
+        return 2
+    
+
+    @classmethod
+    def transform(cls, parameter_tensor):
+
+        mu = parameter_tensor[:, :, 0]
+        sigma = parameter_tensor[:, :, 1]
+
+        mu = mu
+        sigma = F.softplus(sigma)
+
+        transformed_tensor = torch.stack([mu, sigma], dim=2)
+
+        return transformed_tensor
+    
+
+    @classmethod
+    def nll_loss(cls, parameter_tensor, y, c = None):
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        log_likelihood = 1/(torch.sqrt(2 * torch.pi * sigma**2)) * 1/y * torch.exp(-(torch.log(y) - mu)**2 / (2 * sigma**2))
+
+        if c is not None:
+            log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
+
+        nll = -log_likelihood.mean()
+        return nll
+    
+    @classmethod
+    def cdf(cls, parameter_tensor, y):
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        y_cdf = cls.standard_normal.cdf((torch.log(y) - mu) / sigma) # copilot wants to squeeze this, but im not sure if its correct
+
+        return y_cdf
+    
+    @classmethod
+    def icdf(cls, parameter_tensor, p):
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        z_p = cls.standard_normal.icdf(p)
+
+        y_icdf = torch.exp(mu + sigma * z_p) # copilot wants to squeeze this, but im not sure if its correct
+
+        return y_icdf
+
+
 class Gamma(Distribution):
 
     @classmethod
@@ -224,4 +284,6 @@ class BCCG(Distribution):
         y_icdf = torch.where(nu == 0, mu * torch.exp(sigma * z), mu * (1 + sigma * nu * z)**(1/nu))
 
         return y_icdf
-    
+
+
+
