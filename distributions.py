@@ -244,7 +244,12 @@ class BCCG(Distribution):
         # Correct z, if nu is too close to zero
         z = torch.where(abs(nu) <= eps, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
 
-        standard_normal_term = cls.standard_normal.cdf(1/(sigma * torch.where(torch.abs(nu) < eps, eps, torch.abs(nu))))
+        # replaced by code below because of numerical stability concerns
+        # standard_normal_term = cls.standard_normal.cdf(1/(sigma * torch.where(torch.abs(nu) < eps, eps, torch.abs(nu))))
+
+        standard_normal_denominator = sigma * torch.clamp(torch.abs(nu), min=eps)
+        standard_normal_term = cls.standard_normal.cdf(1 / standard_normal_denominator)
+        standard_normal_term = torch.clamp(standard_normal_term, min=eps)
 
         log_likelihood = ((nu - 1) * torch.log(y) 
                           - 1/2 * z**2 
@@ -286,7 +291,10 @@ class BCCG(Distribution):
         normal = torch_normal(0, 1)
         z = normal.icdf(p)
 
-        y_icdf = torch.where(nu == 0, mu * torch.exp(sigma * z), mu * (1 + sigma * nu * z)**(1/nu))
+        bracket_term = 1 + sigma * nu * z
+        bracket_term = torch.clamp(bracket_term, min=1e-6)
+        
+        y_icdf = torch.where(nu == 0, mu * torch.exp(sigma * z), mu * (bracket_term)**(1/nu))
 
         return y_icdf
 
