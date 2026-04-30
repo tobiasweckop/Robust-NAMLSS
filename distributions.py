@@ -105,7 +105,12 @@ class LogNormal(Distribution):
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
 
-        log_likelihood = 1/(torch.sqrt(2 * torch.pi * sigma**2)) * 1/y * torch.exp(-(torch.log(y) - mu)**2 / (2 * sigma**2))
+        log_likelihood = (
+            - torch.log(y)
+            - torch.log(sigma)
+            - 0.5 * torch.log(2 * torch.pi)
+            - (torch.log(y) - mu)**2 / (2 * sigma**2)
+        )
 
         if c is not None:
             log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
@@ -284,6 +289,4 @@ class BCCG(Distribution):
         y_icdf = torch.where(nu == 0, mu * torch.exp(sigma * z), mu * (1 + sigma * nu * z)**(1/nu))
 
         return y_icdf
-
-
 
