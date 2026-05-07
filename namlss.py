@@ -203,7 +203,7 @@ class NAMLSS(nn.Module):
         return self
 
 
-    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, candidate_list = None, max_epochs = 10000):
+    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, candidate_list = None, max_epochs = 10000, verbose = False):
         
         X_train, y_train, X_val, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val)
 
@@ -238,7 +238,8 @@ class NAMLSS(nn.Module):
             expected_quantiles = torch.linspace((1 - central_proportion)/2, 1 - (1 - central_proportion)/2, len(truncated_y_cdf))
             qq_mse = torch.sum((truncated_y_cdf - expected_quantiles)**2) / len(truncated_y_cdf)
 
-            print(f"Candidate c = {candidate}: Truncated QQ MSE = {qq_mse.item():.6f}")
+            if verbose:
+                print(f"Candidate c = {candidate}: Truncated QQ MSE = {qq_mse.item():.6f}")
 
             # save candidate if it improves over current MSE
             if qq_mse < best_mse:
@@ -246,9 +247,13 @@ class NAMLSS(nn.Module):
                 best_penalty = candidate
                 best_state_dict = candidate_model._snapshot_model_state()
 
-        print(f"best penalty identified as c = {best_penalty}")
+        if verbose:
+            print(f"best penalty identified as c = {best_penalty}")
+
         self.load_state_dict(best_state_dict)
-        print(f"Best performing model state loaded.")
+        
+        if verbose:
+            print(f"Best performing model state loaded.")
 
 
     def predict(self, X):
