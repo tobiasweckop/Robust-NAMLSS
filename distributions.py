@@ -74,6 +74,17 @@ class Normal(Distribution):
         y_icdf = normal_dist.icdf(p).squeeze()
 
         return y_icdf
+    
+    @classmethod
+    def sample(cls, parameters):
+
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+
+        normal_dist = torch_normal(mu, sigma)
+        samples = normal_dist.sample().squeeze()
+
+        return samples
 
 
 class LogNormal(Distribution):
@@ -108,7 +119,7 @@ class LogNormal(Distribution):
         log_likelihood = (
             - torch.log(y)
             - torch.log(sigma)
-            - 0.5 * torch.log(2 * torch.pi)
+            - 0.5 * torch.log(torch.tensor(2 * torch.pi))
             - (torch.log(y) - mu)**2 / (2 * sigma**2)
         )
 
@@ -139,6 +150,14 @@ class LogNormal(Distribution):
         y_icdf = torch.exp(mu + sigma * z_p) # copilot wants to squeeze this, but im not sure if its correct
 
         return y_icdf
+    
+    @classmethod
+    def sample(cls, parameter_tensor):
+
+        sample_size = parameter_tensor.shape[0]
+        probabilities = torch.rand(sample_size)
+
+        return cls.icdf(parameter_tensor, probabilities)
 
 
 class Gamma(Distribution):
@@ -199,6 +218,14 @@ class Gamma(Distribution):
         y_icdf = torch.tensor(y_icdf).squeeze()
 
         return y_icdf
+
+    @classmethod
+    def sample(cls, parameter_tensor):
+
+        sample_size = parameter_tensor.shape[0]
+        probabilities = torch.rand(sample_size)
+
+        return cls.icdf(parameter_tensor, probabilities)
 
 
 class BCCG(Distribution):
@@ -298,3 +325,10 @@ class BCCG(Distribution):
 
         return y_icdf
 
+    @classmethod
+    def sample(cls, parameter_tensor):
+
+        sample_size = parameter_tensor.shape[0]
+        probabilities = torch.rand(sample_size)
+
+        return cls.icdf(parameter_tensor, probabilities)
