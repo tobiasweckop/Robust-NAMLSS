@@ -251,12 +251,13 @@ class NAMLSS(nn.Module):
             print(f"best penalty identified as c = {best_penalty}")
 
         self.load_state_dict(best_state_dict)
-        
+
         if verbose:
             print(f"Best performing model state loaded.")
 
 
     def predict(self, X):
+        
         if X.dim() == 1:
             X = X.unsqueeze(1)
 
@@ -271,3 +272,15 @@ class NAMLSS(nn.Module):
 
         return parameter_tensor
     
+
+    def predict_quantiles(self, X, probabilities):
+
+        quantile_list = []
+
+        parameter_tensor = self.predict(X)
+
+        for i in range(len(probabilities)):
+            y_quantiles = self.distribution.icdf(parameter_tensor, torch.tensor(probabilities[i]))
+            quantile_list.append(y_quantiles)
+
+        return quantile_list
