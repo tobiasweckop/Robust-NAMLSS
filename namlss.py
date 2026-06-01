@@ -344,10 +344,9 @@ class NAMLSS(nn.Module):
 
         self.eval()
         with torch.no_grad():
-            free_parameter_tensor = self.forward(X)
-            full_parameter_tensor = self._assemble_full_parameter_tensor(free_parameter_tensor, self.global_parameter_dict)
+            parameter_tensor = self.forward(X)
 
-        return full_parameter_tensor
+        return parameter_tensor
     
 
     def predict_quantiles(self, X, probabilities):
