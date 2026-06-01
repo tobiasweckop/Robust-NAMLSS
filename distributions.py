@@ -135,7 +135,7 @@ class LogNormal(Distribution):
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
 
-        y_cdf = cls.standard_normal.cdf((torch.log(y) - mu) / sigma) # copilot wants to squeeze this, but im not sure if its correct
+        y_cdf = cls.standard_normal.cdf((torch.log(y) - mu) / sigma)
 
         return y_cdf
     
@@ -147,7 +147,7 @@ class LogNormal(Distribution):
 
         z_p = cls.standard_normal.icdf(p)
 
-        y_icdf = torch.exp(mu + sigma * z_p) # copilot wants to squeeze this, but im not sure if its correct
+        y_icdf = torch.exp(mu + sigma * z_p)
 
         return y_icdf
     
