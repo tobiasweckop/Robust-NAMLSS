@@ -6,18 +6,40 @@ from distributions import Distribution
 
 class NAMLSS(nn.Module):
 
-    def __init__(self, formula = None, n_covariates = None, distribution = None, numeric_mask = None, hidden_size = 8):
+    def __init__(self, formula = None, n_covariates = None, distribution = None, numeric_mask = None, global_param_list = None, hidden_size = 8):
 
-        # initialize nn.Module
+        '''
+        Initializes the NAMLSS model.
+
+        Arguments:
+            formula (str): A string specifying the formula for the model. If None, a default formula will be generated based on n_covariates.
+            n_covariates (int): The number of covariates. Required if formula is None.
+            distribution (str): The name of the distribution to model. Must be a key in Distribution.registry.
+            numeric_mask (torch.BoolTensor): A boolean tensor indicating which covariates are numeric and should be standardized. If None, all covariates are assumed to be numeric.
+            global_param_list (list): A list of parameter indices that should be learned as constant. If None, all parameters are learned.
+            hidden_size (int): The number of hidden units in each submodule.
+        
+        '''
+
+        # initialize torch.nn.Module
         super(NAMLSS, self).__init__()
 
-        # check, if distribution and formula argument are valid and throw an exception or build the network accordingly
+        # validate distribution and formula arguments and set defaults if necessary
         self.distribution = self._resolve_distribution(distribution)
         self.formula = self._check_formula(formula, n_covariates)
         self.terms = self._parse_formula(self.formula)
-        self.module_dict = self._build_modules(self.terms, hidden_size, self.distribution.get_param_count())
+
+        # build modules based on the amount of freely learnable parameters
+        self.global_param_list = global_param_list or []
+        self.global_param_indices = torch.tensor(sorted(self.global_param_list)) - 1
+        self.free_param_indices = torch.tensor([i for i in range(self.distribution.get_param_count()) if i not in self.global_param_indices])
+        self.free_parameter_count = self._get_free_parameters(self.global_param_indices)
+        self.module_dict = self._build_modules(self.terms, hidden_size, self.free_parameter_count)
+        self.global_parameter_dict = self._register_global_parameters(self.global_param_indices)
         self.numeric_mask = numeric_mask
-    
+
+        # stores the correct order of parameters loss computation
+        self.correct_param_index_tensor = torch.argsort(torch.cat((self.free_param_indices, self.global_param_indices)))
 
     def _resolve_distribution(self, distribution):
         if distribution is None:
@@ -41,7 +63,7 @@ class NAMLSS(nn.Module):
         
         else: 
             return formula
-        
+
 
     def _parse_formula(self, formula):
 
@@ -56,7 +78,7 @@ class NAMLSS(nn.Module):
         return parsed_terms
 
 
-    def _build_modules(self, terms, hidden_size, parameter_count):
+    def _build_modules(self, terms, hidden_size, free_parameter_count):
         module_dict = nn.ModuleDict()
 
         for term in terms:
@@ -66,7 +88,7 @@ class NAMLSS(nn.Module):
             module = nn.Sequential(
                 nn.Linear(input_dim, hidden_size),
                 nn.Tanh(),
-                nn.Linear(hidden_size, parameter_count)
+                nn.Linear(hidden_size, free_parameter_count)
             )
 
             module_dict[term_key] = module
@@ -74,21 +96,36 @@ class NAMLSS(nn.Module):
         return module_dict
 
 
-    def forward(self, X):
-        # gives each covariate to its corresponding submodule
-        # output: list of [observations x parameters] matrices
-        component_outputs = [self.module_dict[key](X[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
+    def _get_free_parameters(self, global_param_indices):
 
-        # [observations x submodules x parameters]
-        stacked_array = torch.stack(component_outputs, dim = 1)
+        total_parameter_count = self.distribution.get_param_count()
 
-        # apply distribution specific transformations to get final parameter vectors
-        transformed_parameter_tensor = self.distribution.transform(stacked_array)
+        # check, if too many constant parameters are provided
+        if len(global_param_indices) >= total_parameter_count:
+            raise ValueError(f"Number of constant parameters ({len(global_param_indices)}) must be less than total parameters for the distribution ({total_parameter_count}).")
+        
+        # check, if constant parameter indices are valid
+        if any(parameter_index >= total_parameter_count or parameter_index < 0 for parameter_index in global_param_indices):
+            raise ValueError(f"Constant parameter indices must be between 0 and {total_parameter_count}.")
+        
+        # check, if constant parameter indices are unique
+        if len(set(global_param_indices)) != len(global_param_indices):
+            raise ValueError("Constant parameter indices must be unique.")
 
-        # sums over submodules to get final parameter estimates for each distribution parameter
-        parameter_estimate_tensor = torch.sum(transformed_parameter_tensor, dim = 1)
+        # calculate number of freely learnable parameters
+        free_parameter_count = total_parameter_count - len(global_param_indices)
 
-        return parameter_estimate_tensor
+        return free_parameter_count
+
+
+    def _register_global_parameters(self, global_param_indices):
+
+        param_names = [str(param.item()) for param in global_param_indices]
+
+        # global_node_dict = nn.ParameterDict({param_name: nn.Parameter(torch.zeros(1)) for param_name in param_names})
+        global_node_dict = nn.ParameterDict({param_name: nn.Parameter(torch.ones(1)) for param_name in param_names})
+
+        return global_node_dict
 
 
     def _prepare_inputs(self, X_train, y_train, X_val = None, y_val = None, starting_weights = None, c = None):
@@ -149,6 +186,42 @@ class NAMLSS(nn.Module):
         return {key : value.detach().clone() for key, value in self.state_dict().items()}
 
 
+    def _assemble_full_parameter_tensor(self, free_parameter_tensor, global_parameter_dict):
+
+        if global_parameter_dict is None or len(global_parameter_dict) == 0:
+            return free_parameter_tensor
+
+        # extract parameters from dictionary and stack into tensor
+        global_parameter_tensor = torch.cat([p.repeat(free_parameter_tensor.size(0), 1)for p in global_parameter_dict.values()], dim = 1)
+
+        # put free and constant parameters into one tensor
+        combined_parameter_tensor = torch.cat((free_parameter_tensor, global_parameter_tensor), dim=1)
+
+        # place columns in correct order for loss computation
+        reordered_parameter_tensor = combined_parameter_tensor[:, self.correct_param_index_tensor]
+
+        return reordered_parameter_tensor
+    
+
+    def forward(self, X):
+        # gives each covariate to its corresponding submodule
+        # output: list of [observations x parameters] matrices
+        component_outputs = [self.module_dict[key](X[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
+
+        full_component_parameter_tensor_list = [self._assemble_full_parameter_tensor(component_output, self.global_parameter_dict) for component_output in component_outputs]
+
+        # [observations x submodules x parameters]
+        stacked_array = torch.stack(full_component_parameter_tensor_list, dim = 1)
+
+        # apply distribution specific transformations to get final parameter vectors
+        transformed_parameter_tensor = self.distribution.transform(stacked_array)
+
+        # sums over submodules to get final parameter estimates for each distribution parameter
+        parameter_estimate_tensor = torch.sum(transformed_parameter_tensor, dim = 1)
+
+        return parameter_estimate_tensor
+
+
     def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
             early_stopping_patience = 10, c = None, starting_weights = None, verbose = False):
 
@@ -166,6 +239,7 @@ class NAMLSS(nn.Module):
 
             # Forward pass and loss computation
             parameter_tensor = self.forward(X_train)
+
             train_loss = self.distribution.nll_loss(parameter_tensor, y_train, c)
 
             # Backward pass and optimization
@@ -180,8 +254,10 @@ class NAMLSS(nn.Module):
                 self.eval()
 
                 with torch.no_grad():
-                    validation_parameter_tensor = self.forward(X_val)
-                    val_loss = self.distribution.nll_loss(validation_parameter_tensor, y_val, c).item()
+                    parameter_validation_tensor = self.forward(X_val)
+                    # full_parameter_validation_tensor = self._assemble_full_parameter_tensor(free_parameter_validation_tensor, self.global_parameter_dict)
+
+                    val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c).item()
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -214,7 +290,7 @@ class NAMLSS(nn.Module):
 
         best_mse = float("inf")
 
-        candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__)
+        candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = 8)
 
         for candidate in candidate_list:
 
@@ -257,7 +333,7 @@ class NAMLSS(nn.Module):
 
 
     def predict(self, X):
-        
+
         if X.dim() == 1:
             X = X.unsqueeze(1)
 
@@ -268,9 +344,10 @@ class NAMLSS(nn.Module):
 
         self.eval()
         with torch.no_grad():
-            parameter_tensor = self.forward(X)
+            free_parameter_tensor = self.forward(X)
+            full_parameter_tensor = self._assemble_full_parameter_tensor(free_parameter_tensor, self.global_parameter_dict)
 
-        return parameter_tensor
+        return full_parameter_tensor
     
 
     def predict_quantiles(self, X, probabilities):
