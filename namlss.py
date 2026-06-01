@@ -332,7 +332,7 @@ class NAMLSS(nn.Module):
             print(f"Best performing model state loaded.")
 
 
-    def predict(self, X):
+    def predict_parameters(self, X):
 
         if X.dim() == 1:
             X = X.unsqueeze(1)
