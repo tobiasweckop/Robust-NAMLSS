@@ -296,7 +296,7 @@ class NAMLSS(nn.Module):
 
             # Fit the model
             candidate_model.fit(X_train, y_train, X_val, y_val, c = candidate)
-            parameter_tensor = candidate_model.predict(X_val)
+            parameter_tensor = candidate_model.predict_parameters(X_val)
 
             y_cdf = self.distribution.cdf(parameter_tensor, y_val)
             y_cdf_sorted = torch.sort(y_cdf).values
@@ -353,7 +353,7 @@ class NAMLSS(nn.Module):
 
         quantile_list = []
 
-        parameter_tensor = self.predict(X)
+        parameter_tensor = self.predict_parameters(X)
 
         for i in range(len(probabilities)):
             y_quantiles = self.distribution.icdf(parameter_tensor, torch.tensor(probabilities[i]))
