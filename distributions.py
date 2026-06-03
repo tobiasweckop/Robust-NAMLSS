@@ -36,6 +36,16 @@ class Normal(Distribution):
         return transformed_tensor
 
     @classmethod
+    def pdf(cls, parameters, y):
+
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+
+        y_pdf = 1/(torch.sqrt(2 * torch.pi) * sigma) * torch.exp(-(y - mu)**2 / 2 * sigma**2)
+
+        return y_pdf
+
+    @classmethod
     def nll_loss(cls, parameters, y, c = None):
 
         mu = parameters[:, 0]
@@ -94,7 +104,6 @@ class LogNormal(Distribution):
     @classmethod
     def get_param_count(cls):
         return 2
-    
 
     @classmethod
     def transform(cls, parameter_tensor):
@@ -109,6 +118,15 @@ class LogNormal(Distribution):
 
         return transformed_tensor
     
+    @classmethod
+    def pdf(cls, parameter_tensor, y):
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        y_pdf = 1/(torch.sqrt(2 * torch.pi * sigma**2)) * 1/y * torch.exp(-(torch.log(y) - mu)**2 / 2 * sigma**2)
+
+        return y_pdf
 
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
@@ -178,6 +196,18 @@ class Gamma(Distribution):
         transformed_tensor = torch.stack([alpha, theta], dim=2)
 
         return transformed_tensor
+
+    @classmethod
+    def pdf(cls, parameter_tensor, y):
+
+        alpha = parameter_tensor[:, 0]
+        theta = parameter_tensor[:, 1]
+
+        gamma_dist = torch_gamma(alpha, 1/theta) # Note: Pytorch Gamma uses shape and rate (1/theta)
+
+        y_pdf = gamma_dist.log_prob(y).exp()
+
+        return y_pdf
 
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
@@ -250,6 +280,21 @@ class BCCG(Distribution):
         transformed_tensor = torch.stack([mu, sigma, nu], dim=2)
 
         return transformed_tensor
+
+    @classmethod
+    def pdf(cls, parameter_tensor, y):
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+        nu = parameter_tensor[:, 2]
+
+        # not sure if this needs to be numerically stabilized
+        z = torch.where(nu == 0, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
+
+        # Compute the PDF
+        y_pdf = y**(nu - 1) * torch.exp(-1/2 * z**2) / (mu**nu * sigma * torch.sqrt(2 * torch.pi) * (1/sigma * abs(nu)))
+
+        return y_pdf
 
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
