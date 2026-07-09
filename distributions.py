@@ -124,7 +124,7 @@ class LogNormal(Distribution):
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
 
-        y_pdf = 1/(torch.sqrt(2 * torch.pi * sigma**2)) * 1/y * torch.exp(-(torch.log(y) - mu)**2 / 2 * sigma**2)
+        y_pdf = 1/(torch.sqrt(2 * torch.pi * sigma**2)) * 1/y * torch.exp(-(torch.log(y) - mu)**2 / (2 * sigma**2))
 
         return y_pdf
 
