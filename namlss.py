@@ -13,10 +13,15 @@ class NAMLSS(nn.Module):
 
         Arguments:
             formula (str): A string specifying the formula for the model. If None, a default formula will be generated based on n_covariates.
+
             n_covariates (int): The number of covariates. Required if formula is None.
+
             distribution (str): The name of the distribution to model. Must be a key in Distribution.registry.
+
             numeric_mask (torch.BoolTensor): A boolean tensor indicating which covariates are numeric and should be standardized. If None, all covariates are assumed to be numeric.
+
             global_param_list (list): A list of parameter indices that should be learned as constant. If None, all parameters are learned.
+            
             hidden_size (int): The number of hidden units in each submodule.
         
         '''
@@ -40,6 +45,7 @@ class NAMLSS(nn.Module):
 
         # stores the correct order of parameters loss computation
         self.correct_param_index_tensor = torch.argsort(torch.cat((self.free_param_indices, self.global_param_indices)))
+
 
     def _resolve_distribution(self, distribution):
         if distribution is None:
@@ -128,7 +134,10 @@ class NAMLSS(nn.Module):
         return global_node_dict
 
 
-    def _prepare_inputs(self, X_train, y_train, X_val = None, y_val = None, starting_weights = None, c = None):
+    def _prepare_inputs(self, X_train, y_train = None, X_val = None, y_val = None, starting_weights = None, c = None):
+        ''' 
+        Takes raw covariates, gives them the correct shapes and standardizes X.
+        '''
 
         # Load starting weights if provided
         if starting_weights is not None:
@@ -141,8 +150,9 @@ class NAMLSS(nn.Module):
         # Reshape input tensors if necessary
         if X_train.dim() == 1:
             X_train = X_train.unsqueeze(1)
-        if y_train.dim() == 2 and y_train.size(1) == 1:
-            y_train = y_train.squeeze(1)
+        if y_train is not None:
+            if y_train.dim() == 2 and y_train.size(1) == 1:
+                y_train = y_train.squeeze(1)
         if X_val is not None and X_val.dim() == 1:
             X_val = X_val.unsqueeze(1)
         if y_val is not None:
@@ -155,6 +165,9 @@ class NAMLSS(nn.Module):
 
 
     def _standardize_covariates(self, X_train, X_val = None):
+        '''
+        Takes raw covariates and standardizes them.
+        '''
 
         if self.numeric_mask is None:
             self.numeric_mask = torch.ones(X_train.shape[1], dtype=torch.bool)
@@ -203,10 +216,15 @@ class NAMLSS(nn.Module):
         return reordered_parameter_tensor
     
 
-    def forward(self, X):
+    def _forward(self, X_standardized):
+        '''
+        Expects correctly shaped and standardized input X. 
+        Returns a tensor of shape [observations x distribution parameters] with the predicted parameters for each observation.
+        '''
+
         # gives each covariate to its corresponding submodule
         # output: list of [observations x parameters] matrices
-        component_outputs = [self.module_dict[key](X[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
+        component_outputs = [self.module_dict[key](X_standardized[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
 
         full_component_parameter_tensor_list = [self._assemble_full_parameter_tensor(component_output, self.global_parameter_dict) for component_output in component_outputs]
 
@@ -224,8 +242,12 @@ class NAMLSS(nn.Module):
 
     def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
             early_stopping_patience = 10, c = None, starting_weights = None, verbose = False):
+        ''' 
+        Expects raw covariates and response. Standardizes X internally before optimizing.
+        If validation data are provided, early stopping is used.
+        '''
 
-        X_train, y_train, X_val, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val, starting_weights, c)
+        X_train_standardized, y_train, X_val_standardized, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val, starting_weights, c)
 
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
 
@@ -238,7 +260,7 @@ class NAMLSS(nn.Module):
             self.train()
 
             # Forward pass and loss computation
-            parameter_tensor = self.forward(X_train)
+            parameter_tensor = self._forward(X_train_standardized)
 
             train_loss = self.distribution.nll_loss(parameter_tensor, y_train, c)
 
@@ -254,10 +276,10 @@ class NAMLSS(nn.Module):
                 self.eval()
 
                 with torch.no_grad():
-                    parameter_validation_tensor = self.forward(X_val)
+                    parameter_validation_tensor = self._forward(X_val_standardized)
                     # full_parameter_validation_tensor = self._assemble_full_parameter_tensor(free_parameter_validation_tensor, self.global_parameter_dict)
 
-                    val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c).item()
+                val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c).item()
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -281,7 +303,7 @@ class NAMLSS(nn.Module):
 
     def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, candidate_list = None, max_epochs = 10000, verbose = False):
         
-        X_train, y_train, X_val, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val)
+        X_train_standardized, y_train, X_val_standardized, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val)
 
         if candidate_list is not None:
             candidate_list = candidate_list
@@ -290,13 +312,15 @@ class NAMLSS(nn.Module):
 
         best_mse = float("inf")
 
-        candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = 8)
+        candidate_model = NAMLSS(n_covariates=X_train_standardized.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = 8)
 
         for candidate in candidate_list:
 
             # Fit the model
-            candidate_model.fit(X_train, y_train, X_val, y_val, c = candidate)
-            parameter_tensor = candidate_model.predict_parameters(X_val)
+            candidate_model.fit(X_train_standardized, y_train, X_val_standardized, y_val, c = candidate, max_epochs = max_epochs)
+
+            with torch.no_grad():
+                parameter_tensor = candidate_model._forward(X_val_standardized)
 
             y_cdf = self.distribution.cdf(parameter_tensor, y_val)
             y_cdf_sorted = torch.sort(y_cdf).values
@@ -332,28 +356,33 @@ class NAMLSS(nn.Module):
             print(f"Best performing model state loaded.")
 
 
-    def predict_parameters(self, X):
+    def marginal_effects(self, X):
 
-        if X.dim() == 1:
-            X = X.unsqueeze(1)
+        X_standardized = self._prepare_inputs(X)[0]
 
-        # apply the same scaling as during training
-        mask = self.numeric_mask
-        X = X.clone()
-        X[:, mask] = (X[:, mask] - self.X_mean[mask]) / self.X_std[mask]
-
-        self.eval()
         with torch.no_grad():
-            parameter_tensor = self.forward(X)
+            component_outputs = [self.module_dict[key](X_standardized[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
+            full_component_parameter_tensor_list = [self._assemble_full_parameter_tensor(component_output, self.global_parameter_dict) for component_output in component_outputs]
 
-        return parameter_tensor
+            # [observations x submodules x parameters]
+            stacked_array = torch.stack(full_component_parameter_tensor_list, dim = 1)
+
+            # apply distribution specific transformations to get final parameter vectors
+            transformed_parameter_tensor = self.distribution.transform(stacked_array)
+
+        return transformed_parameter_tensor
     
 
     def predict_quantiles(self, X, probabilities):
 
+        ''' Takes an unstandardized version of X and predicts quantiles for the specified probabilities.'''
+
         quantile_list = []
 
-        parameter_tensor = self.predict_parameters(X)
+        X_standardized = self._prepare_inputs(X)[0]
+
+        with torch.no_grad():
+            parameter_tensor = self._forward(X_standardized)
 
         for i in range(len(probabilities)):
             y_quantiles = self.distribution.icdf(parameter_tensor, torch.tensor(probabilities[i]))
