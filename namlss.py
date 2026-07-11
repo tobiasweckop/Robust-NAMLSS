@@ -28,6 +28,7 @@ class NAMLSS(nn.Module):
 
         # initialize torch.nn.Module
         super(NAMLSS, self).__init__()
+        self.hidden_size = hidden_size
 
         # validate distribution and formula arguments and set defaults if necessary
         self.distribution = self._resolve_distribution(distribution)
@@ -43,7 +44,7 @@ class NAMLSS(nn.Module):
         self.global_parameter_dict = self._register_global_parameters(self.global_param_indices)
         self.numeric_mask = numeric_mask
 
-        # stores the correct order of parameters loss computation
+        # stores the correct order of parameters for loss computation
         self.correct_param_index_tensor = torch.argsort(torch.cat((self.free_param_indices, self.global_param_indices)))
 
 
@@ -85,6 +86,7 @@ class NAMLSS(nn.Module):
 
 
     def _build_modules(self, terms, hidden_size, free_parameter_count):
+
         module_dict = nn.ModuleDict()
 
         for term in terms:
@@ -112,7 +114,7 @@ class NAMLSS(nn.Module):
         
         # check, if constant parameter indices are valid
         if any(parameter_index >= total_parameter_count or parameter_index < 0 for parameter_index in global_param_indices):
-            raise ValueError(f"Constant parameter indices must be between 0 and {total_parameter_count}.")
+            raise ValueError(f"Parameter positions must be between 1 and {total_parameter_count}.")
         
         # check, if constant parameter indices are unique
         if len(set(global_param_indices)) != len(global_param_indices):
@@ -294,16 +296,13 @@ class NAMLSS(nn.Module):
                     self.load_state_dict(best_model_state)
                     break
 
-            if epoch % 100 == 0 or val_loss is not None:
-                if verbose:
-                    print(f"Epoch {epoch} - Train Loss: {train_loss.item():.4f} - Val Loss: {val_loss:.4f}" if val_loss else f"Epoch {epoch} - Train Loss: {train_loss.item():.4f}")
+            if epoch % 100 == 0 and verbose:
+                print(f"Epoch {epoch} - Train Loss: {train_loss.item():.4f} - Val Loss: {val_loss:.4f}" if val_loss is not None else f"Epoch {epoch} - Train Loss: {train_loss.item():.4f}")
 
         return self
 
 
     def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, candidate_list = None, max_epochs = 10000, verbose = False):
-        
-        X_train_standardized, y_train, X_val_standardized, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val)
 
         if candidate_list is not None:
             candidate_list = candidate_list
@@ -312,15 +311,15 @@ class NAMLSS(nn.Module):
 
         best_mse = float("inf")
 
-        candidate_model = NAMLSS(n_covariates=X_train_standardized.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = 8)
+        candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = self.hidden_size)
 
         for candidate in candidate_list:
 
             # Fit the model
-            candidate_model.fit(X_train_standardized, y_train, X_val_standardized, y_val, c = candidate, max_epochs = max_epochs)
+            candidate_model.fit(X_train, y_train, X_val, y_val, c = candidate, max_epochs = max_epochs)
 
             with torch.no_grad():
-                parameter_tensor = candidate_model._forward(X_val_standardized)
+                parameter_tensor = candidate_model.predict_parameters(X_val)
 
             y_cdf = self.distribution.cdf(parameter_tensor, y_val)
             y_cdf_sorted = torch.sort(y_cdf).values
@@ -335,7 +334,7 @@ class NAMLSS(nn.Module):
             truncated_y_cdf = y_cdf_sorted[central_mask]
 
             # compute MSE between empirical and theoretical quantiles in central interval
-            expected_quantiles = torch.linspace((1 - central_proportion)/2, 1 - (1 - central_proportion)/2, len(truncated_y_cdf))
+            expected_quantiles = torch.linspace((1 - central_proportion)/2, 1 - (1 - central_proportion)/2, len(truncated_y_cdf), device = truncated_y_cdf.device)
             qq_mse = torch.sum((truncated_y_cdf - expected_quantiles)**2) / len(truncated_y_cdf)
 
             if verbose:
@@ -356,9 +355,25 @@ class NAMLSS(nn.Module):
             print(f"Best performing model state loaded.")
 
 
+    def predict_parameters(self, X):
+
+        if X.dim() == 1:
+            X = X.unsqueeze(0)
+
+        X_standardized = (X - self.X_mean)/self.X_std
+
+        with torch.no_grad():
+            parameter_tensor = self._forward(X_standardized)
+
+        return parameter_tensor
+
+
     def marginal_effects(self, X):
 
-        X_standardized = self._prepare_inputs(X)[0]
+        if X.dim() == 1:
+            X = X.unsqueeze(0)
+
+        X_standardized = (X - self.X_mean)/self.X_std
 
         with torch.no_grad():
             component_outputs = [self.module_dict[key](X_standardized[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
@@ -379,7 +394,10 @@ class NAMLSS(nn.Module):
 
         quantile_list = []
 
-        X_standardized = self._prepare_inputs(X)[0]
+        if X.dim() == 1:
+            X = X.unsqueeze(0)
+            
+        X_standardized = (X - self.X_mean)/self.X_std
 
         with torch.no_grad():
             parameter_tensor = self._forward(X_standardized)
