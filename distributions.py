@@ -12,11 +12,39 @@ class Distribution:
 
     def __init_subclass__(cls, **kwargs):
         
-        # This currently does nothing
+        # This currently does nothing.
         super().__init_subclass__(**kwargs)
 
         # Registers the subclass in the registry
         Distribution.registry[cls.__name__.lower()] = cls
+
+
+    @classmethod
+    def _verify_input_shapes(cls, parameter_tensor, vector = None):
+
+        if parameter_tensor.ndim != 2:
+            raise ValueError(
+                f"Expected parameter_tensor to have shape (N,{cls.get_param_count()}). Got {tuple(parameter_tensor.shape)} instead."
+            )
+
+        if parameter_tensor.shape[1] != cls.get_param_count():
+            raise ValueError(
+                f"Expected {cls.get_param_count()} parameters. Got {parameter_tensor.shape[1]} instead."
+            )
+
+        if not isinstance(parameter_tensor, torch.Tensor):
+            raise TypeError("parameter_tensor must be a torch.Tensor.")
+
+        if vector is not None:
+            if vector.ndim != 1:
+                raise ValueError(
+                    f"Expected vector to have shape (N,), got {tuple(vector.shape)}."
+                )
+
+            if parameter_tensor.shape[0] != vector.shape[0]:
+                raise ValueError("Batch sizes do not match.")
+                
+
 
 
 class Normal(Distribution):
@@ -26,30 +54,34 @@ class Normal(Distribution):
         return 2
 
     @classmethod
-    def transform(cls, parameter_tensor):
+    def transform(cls, stacked_parameter_tensor):
 
-        mu = parameter_tensor[:, :, 0]
-        sigma = F.softplus(parameter_tensor[:, :, 1])
+        mu = stacked_parameter_tensor[:, :, 0]
+        sigma = F.softplus(stacked_parameter_tensor[:, :, 1])
 
         transformed_tensor = torch.stack([mu, sigma], dim=2)
 
         return transformed_tensor
 
     @classmethod
-    def pdf(cls, parameters, y):
+    def pdf(cls, parameter_tensor, y):
 
-        mu = parameters[:, 0]
-        sigma = parameters[:, 1]
+        cls._verify_input_shapes(parameter_tensor, y)
 
-        y_pdf = 1/(torch.sqrt(2 * torch.pi) * sigma) * torch.exp(-(y - mu)**2 / 2 * sigma**2)
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        y_pdf = 1/(torch.sqrt(2 * torch.pi) * sigma) * torch.exp(-(y - mu)**2 / (2 * sigma**2))
 
         return y_pdf
 
     @classmethod
-    def nll_loss(cls, parameters, y, c = None):
+    def nll_loss(cls, parameter_tensor, y, c = None):
 
-        mu = parameters[:, 0]
-        sigma = parameters[:, 1]
+        cls._verify_input_shapes(parameter_tensor, y)
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
 
         normal_dist = torch_normal(mu, sigma)
         log_likelihood = normal_dist.log_prob(y)
@@ -61,38 +93,44 @@ class Normal(Distribution):
         return nll
 
     @classmethod
-    def cdf(cls, parameters, y):
+    def cdf(cls, parameter_tensor, y):
 
-        mu = parameters[:, 0]
-        sigma = parameters[:, 1]
+        cls._verify_input_shapes(parameter_tensor, y)
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
 
         normal_dist = torch_normal(mu, sigma)
-        y_cdf = normal_dist.cdf(y).squeeze()
+        y_cdf = normal_dist.cdf(y)
 
         return y_cdf
 
     @classmethod
-    def icdf(cls, parameters, p):
+    def icdf(cls, parameter_tensor, p):
+
+        cls._verify_input_shapes(parameter_tensor, p)
 
         if not isinstance(p, torch.Tensor):
             p = torch.tensor(p)
 
-        mu = parameters[:, 0]
-        sigma = parameters[:, 1]
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
 
         normal_dist = torch_normal(mu, sigma)
-        y_icdf = normal_dist.icdf(p).squeeze()
+        y_icdf = normal_dist.icdf(p)
 
         return y_icdf
     
     @classmethod
-    def sample(cls, parameters):
+    def sample(cls, parameter_tensor):
 
-        mu = parameters[:, 0]
-        sigma = parameters[:, 1]
+        cls._verify_input_shapes(parameter_tensor)
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
 
         normal_dist = torch_normal(mu, sigma)
-        samples = normal_dist.sample().squeeze()
+        samples = normal_dist.sample()
 
         return samples
 
@@ -106,10 +144,10 @@ class LogNormal(Distribution):
         return 2
 
     @classmethod
-    def transform(cls, parameter_tensor):
+    def transform(cls, stacked_parameter_tensor):
 
-        mu = parameter_tensor[:, :, 0]
-        sigma = parameter_tensor[:, :, 1]
+        mu = stacked_parameter_tensor[:, :, 0]
+        sigma = stacked_parameter_tensor[:, :, 1]
 
         mu = mu
         sigma = F.softplus(sigma)
@@ -121,6 +159,8 @@ class LogNormal(Distribution):
     @classmethod
     def pdf(cls, parameter_tensor, y):
 
+        cls._verify_input_shapes(parameter_tensor, y)
+
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
 
@@ -130,6 +170,8 @@ class LogNormal(Distribution):
 
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
+
+        cls._verify_input_shapes(parameter_tensor, y)
 
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
@@ -150,6 +192,8 @@ class LogNormal(Distribution):
     @classmethod
     def cdf(cls, parameter_tensor, y):
 
+        cls._verify_input_shapes(parameter_tensor, y)
+
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
 
@@ -159,6 +203,8 @@ class LogNormal(Distribution):
     
     @classmethod
     def icdf(cls, parameter_tensor, p):
+
+        cls._verify_input_shapes(parameter_tensor, p)
 
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
@@ -171,6 +217,8 @@ class LogNormal(Distribution):
     
     @classmethod
     def sample(cls, parameter_tensor):
+
+        cls._verify_input_shapes(parameter_tensor)
 
         sample_size = parameter_tensor.shape[0]
         probabilities = torch.rand(sample_size)
@@ -185,10 +233,10 @@ class Gamma(Distribution):
         return 2
 
     @classmethod
-    def transform(cls, parameter_tensor):
+    def transform(cls, stacked_parameter_tensor):
 
-        alpha = parameter_tensor[:, :, 0]
-        theta = parameter_tensor[:, :, 1]
+        alpha = stacked_parameter_tensor[:, :, 0]
+        theta = stacked_parameter_tensor[:, :, 1]
 
         alpha = F.softplus(alpha)
         theta = F.softplus(theta)
@@ -199,6 +247,8 @@ class Gamma(Distribution):
 
     @classmethod
     def pdf(cls, parameter_tensor, y):
+
+        cls._verify_input_shapes(parameter_tensor, y)
 
         alpha = parameter_tensor[:, 0]
         theta = parameter_tensor[:, 1]
@@ -211,6 +261,8 @@ class Gamma(Distribution):
 
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
+
+        cls._verify_input_shapes(parameter_tensor, y)
 
         alpha = parameter_tensor[:, 0]
         theta = parameter_tensor[:, 1]
@@ -227,16 +279,20 @@ class Gamma(Distribution):
     @classmethod
     def cdf(cls, parameter_tensor, y):
 
+        cls._verify_input_shapes(parameter_tensor, y)
+
         alpha = parameter_tensor[:, 0]
         theta = parameter_tensor[:, 1]
 
         dist = torch_gamma(alpha, 1/theta)
-        y_cdf = dist.cdf(y).squeeze()
+        y_cdf = dist.cdf(y)
 
         return y_cdf
     
     @classmethod
     def icdf(cls, parameter_tensor, p):
+
+        cls._verify_input_shapes(parameter_tensor, p)
 
         if not isinstance(p, torch.Tensor):
             p = torch.tensor(p)
@@ -245,12 +301,14 @@ class Gamma(Distribution):
         theta = parameter_tensor[:, 1]
 
         y_icdf = stats.gamma.ppf(p, a = alpha, scale = theta)
-        y_icdf = torch.tensor(y_icdf).squeeze()
+        y_icdf = torch.tensor(y_icdf)
 
         return y_icdf
 
     @classmethod
     def sample(cls, parameter_tensor):
+
+        cls._verify_input_shapes(parameter_tensor)
 
         sample_size = parameter_tensor.shape[0]
         probabilities = torch.rand(sample_size)
@@ -267,11 +325,11 @@ class BCCG(Distribution):
         return 3
     
     @classmethod
-    def transform(cls, parameter_tensor):
+    def transform(cls, stacked_parameter_tensor):
 
-        mu = parameter_tensor[:, :, 0]
-        sigma = parameter_tensor[:, :, 1]
-        nu = parameter_tensor[:, :, 2]
+        mu = stacked_parameter_tensor[:, :, 0]
+        sigma = stacked_parameter_tensor[:, :, 1]
+        nu = stacked_parameter_tensor[:, :, 2]
 
         mu = F.softplus(mu)
         sigma = F.softplus(sigma)
@@ -283,6 +341,8 @@ class BCCG(Distribution):
 
     @classmethod
     def pdf(cls, parameter_tensor, y):
+
+        cls._verify_input_shapes(parameter_tensor, y)
 
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
@@ -298,6 +358,8 @@ class BCCG(Distribution):
 
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
+
+        cls._verify_input_shapes(parameter_tensor, y)
 
         eps = 1e-6
 
@@ -339,6 +401,8 @@ class BCCG(Distribution):
     @classmethod
     def cdf(cls, parameter_tensor, y):
 
+        cls._verify_input_shapes(parameter_tensor, y)
+
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
         nu = parameter_tensor[:, 2]
@@ -352,6 +416,8 @@ class BCCG(Distribution):
 
     @classmethod
     def icdf(cls, parameter_tensor, p):
+
+        cls._verify_input_shapes(parameter_tensor, p)
 
         if not isinstance(p, torch.Tensor):
             p = torch.tensor(p)
@@ -372,6 +438,8 @@ class BCCG(Distribution):
 
     @classmethod
     def sample(cls, parameter_tensor):
+
+        cls._verify_input_shapes(parameter_tensor)
 
         sample_size = parameter_tensor.shape[0]
         probabilities = torch.rand(sample_size)
