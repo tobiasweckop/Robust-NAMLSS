@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import torch.nn as nn
+import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from distributions import Distribution
 
@@ -302,7 +303,15 @@ class NAMLSS(nn.Module):
         return self
 
 
-    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, candidate_list = None, max_epochs = 10000, verbose = False):
+    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, candidate_list = None, max_epochs = 10000, verbose = False, plot = False):
+
+        if y_train.ndim == 2:
+            assert y_train.shape[1] == 1
+            y_train = y_train.squeeze(1)
+
+        if y_val.ndim == 2:
+            assert y_val.shape[1] == 1
+            y_val = y_val.squeeze(1)
 
         if candidate_list is not None:
             candidate_list = candidate_list
@@ -330,7 +339,7 @@ class NAMLSS(nn.Module):
 
             # keep only quantiles within central interval
             central_mask = (y_cdf_sorted >= lower_bound) & (y_cdf_sorted <= upper_bound)
-            central_mask = central_mask.squeeze()
+            central_mask = central_mask
             truncated_y_cdf = y_cdf_sorted[central_mask]
 
             # compute MSE between empirical and theoretical quantiles in central interval
@@ -345,6 +354,8 @@ class NAMLSS(nn.Module):
                 best_mse = qq_mse
                 best_penalty = candidate
                 best_state_dict = candidate_model._snapshot_model_state()
+                self.X_mean = candidate_model.X_mean
+                self.X_std = candidate_model.X_std
 
         if verbose:
             print(f"best penalty identified as c = {best_penalty}")
@@ -363,7 +374,7 @@ class NAMLSS(nn.Module):
         X_standardized = (X - self.X_mean)/self.X_std
 
         with torch.no_grad():
-            parameter_tensor = self._forward(X_standardized)
+            parameter_tensor = self._forward(X_standardized = X_standardized)
 
         return parameter_tensor
 
@@ -407,3 +418,4 @@ class NAMLSS(nn.Module):
             quantile_list.append(y_quantiles)
 
         return quantile_list
+    
