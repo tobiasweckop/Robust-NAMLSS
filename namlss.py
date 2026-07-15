@@ -3,6 +3,7 @@ import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
+import distributions
 from distributions import Distribution
 
 class NAMLSS(nn.Module):
@@ -316,7 +317,7 @@ class NAMLSS(nn.Module):
         if candidate_list is not None:
             candidate_list = candidate_list
         else:
-            candidate_list = [None] + [6] + np.round(np.arange(5.1, 2, -0.1),1).tolist() + [1, 0]  # creates list of penalties to test
+            candidate_list = [None] + np.round(np.arange(6.1, 2, -0.1),1).tolist() + [1, 0]  # creates list of penalties to test
 
         best_mse = float("inf")
 
@@ -327,9 +328,10 @@ class NAMLSS(nn.Module):
             # Fit the model
             candidate_model.fit(X_train, y_train, X_val, y_val, c = candidate, max_epochs = max_epochs)
 
-            with torch.no_grad():
-                parameter_tensor = candidate_model.predict_parameters(X_val)
+            # Predict parameters based on validation data
+            parameter_tensor = candidate_model.predict_parameters(X_val)
 
+            # Calculate cdf-values of y given estimated parameters
             y_cdf = self.distribution.cdf(parameter_tensor, y_val)
             y_cdf_sorted = torch.sort(y_cdf).values
 
@@ -364,6 +366,9 @@ class NAMLSS(nn.Module):
 
         if verbose:
             print(f"Best performing model state loaded.")
+
+        if plot:
+            self.plot_PIT(X_val, y_val, central_proportion)
 
 
     def predict_parameters(self, X):
@@ -419,3 +424,111 @@ class NAMLSS(nn.Module):
 
         return quantile_list
     
+
+    def plot_PIT(self, X, y, central_proportion = None):
+
+        if X.dim() == 1:
+            X = X.unsqueeze(0)
+
+        if y.ndim == 2:
+            assert y.shape[1] == 1
+            y = y.squeeze(1)
+
+        if central_proportion is None:
+            central_proportion = 1
+
+        predicted_parameter_tensor = self.predict_parameters(X)
+
+        # calculating cdf values for each observation
+        y_cdf = self.distribution.cdf(predicted_parameter_tensor, y)
+        y_cdf_sorted = torch.sort(y_cdf).values
+
+        # define central quantile interval of interest
+        lower_bound = (1 - central_proportion)/2
+        upper_bound = 1 - lower_bound
+
+        # keep only quantiles within central interval
+        central_mask = (y_cdf_sorted >= lower_bound) & (y_cdf_sorted <= upper_bound)
+        central_mask = central_mask
+        truncated_y_cdf = y_cdf_sorted[central_mask]
+
+        # Plot the histogram
+        counts, bins, _ = plt.hist(truncated_y_cdf, bins = 100, density = True, alpha = 0.6)
+
+        if central_proportion < 1:
+            # Add vertical lines to mark central interval
+            plt.axvline(lower_bound, color = "red", linewidth = 2, label = "central interval bounds")
+            plt.axvline(upper_bound, color = "red", linewidth = 2)
+
+        # Average histogram height within the interval
+        bin_centers = 0.5 * (bins[:-1] + bins[1:])
+        inside = (bin_centers >= lower_bound) & (bin_centers <= upper_bound)
+        avg_height = counts[inside].mean()
+
+        # Calculate quantile MSE
+        expected_quantiles = torch.linspace((1 - central_proportion)/2, 1 - (1 - central_proportion)/2, len(truncated_y_cdf), device = truncated_y_cdf.device)
+        qq_mse = torch.sum((truncated_y_cdf - expected_quantiles)**2) / len(truncated_y_cdf)
+
+        # Add horizontal line to show expected bar height inside central interval
+        plt.hlines(avg_height, xmin = lower_bound, xmax = upper_bound, color="red", linestyle = "--",  linewidth=2, label="Average Expected Density")
+        plt.ylim((0, 4 * avg_height))
+
+        plt.xlabel("CDF values")
+        plt.ylabel("Density of Estimated Quantiles")
+        plt.title(f"Histogram of CDF values against expected PIT-density.")
+        plt.legend()
+        plt.show()
+
+
+    def plot_normal_residuals(self, X, y_observed, central_proportion = 0.95, title = None):
+
+        if self.distribution != distributions.Normal:
+            raise ValueError(f"This diagnostic is only available for Normal models, but the current distribution is {self.distribution}.")
+
+        device = self.predict_parameters(X).device
+
+        standard_normal_tensor = torch.tensor([[0.0, 1.0]], device=device)
+
+        p_low = torch.tensor([(1 - central_proportion) / 2], device=device)
+        p_high = torch.tensor([(1 + central_proportion) / 2], device=device)
+
+        # Correct ordering
+        lower_bound = distributions.Normal.icdf(parameter_tensor = standard_normal_tensor, p = p_low).item()
+
+        upper_bound = distributions.Normal.icdf(parameter_tensor = standard_normal_tensor, p = p_high).item()
+
+        parameter_tensor = self.predict_parameters(X)
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        std_residuals = (y_observed - mu) / sigma
+
+        # Histogram requires NumPy
+        residuals_np = std_residuals
+
+        bar_heights, bin_edges = np.histogram(residuals_np, bins = 100, density = False)
+
+        bin_widths = np.diff(bin_edges)
+        bin_centers = bin_edges[:-1] + bin_widths / 2
+
+        central_bins = (bin_centers >= lower_bound) & (bin_centers <= upper_bound)
+
+        area_in_range = np.sum(bar_heights[central_bins] * bin_widths[central_bins])
+
+        rescaled_bars = bar_heights * central_proportion / area_in_range
+
+        plt.bar(bin_centers, rescaled_bars, width = bin_widths, alpha = 0.6, label = "Standardized Residuals")
+
+        x = torch.linspace(-4, 4, 500, device=device)
+        parameters = standard_normal_tensor.repeat(len(x), 1)
+        pdf = distributions.Normal.pdf(parameters, x)
+
+        plt.plot(x, pdf, "--", lw = 2, color = "red", label = "Standard Normal Density")
+
+        plt.xlabel("Residuals")
+        plt.ylabel("Rescaled Density")
+        plt.ylim((0, 0.6))
+        plt.title(title if title is not None else "Standardized Residual Plot")
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
