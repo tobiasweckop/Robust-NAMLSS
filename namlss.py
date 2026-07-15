@@ -28,6 +28,10 @@ class NAMLSS(nn.Module):
         
         '''
 
+        # initialize class attributes
+        self.c = None
+        self.penalty_mse_list = None
+
         # initialize torch.nn.Module
         super(NAMLSS, self).__init__()
         self.hidden_size = hidden_size
@@ -253,6 +257,8 @@ class NAMLSS(nn.Module):
 
         X_train_standardized, y_train, X_val_standardized, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val, starting_weights, c)
 
+        self.chosen_c = c
+
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
 
         best_val_loss = float('inf')
@@ -304,7 +310,7 @@ class NAMLSS(nn.Module):
         return self
 
 
-    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, candidate_list = None, max_epochs = 10000, verbose = False, plot = False):
+    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, penalty_list = None, max_epochs = 10000, verbose = False, plot = False):
 
         if y_train.ndim == 2:
             assert y_train.shape[1] == 1
@@ -314,19 +320,20 @@ class NAMLSS(nn.Module):
             assert y_val.shape[1] == 1
             y_val = y_val.squeeze(1)
 
-        if candidate_list is not None:
-            candidate_list = candidate_list
+        if penalty_list is not None:
+            penalty_list = penalty_list
         else:
-            candidate_list = [None] + np.round(np.arange(6.1, 2, -0.1),1).tolist() + [1, 0]  # creates list of penalties to test
+            penalty_list = [None] + np.round(np.arange(6.1, 1, -0.1),1).tolist()  # creates list of penalties to test
 
         best_mse = float("inf")
+        penalty_mse_list = []
 
         candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = self.hidden_size)
 
-        for candidate in candidate_list:
+        for penalty_candidate in penalty_list:
 
             # Fit the model
-            candidate_model.fit(X_train, y_train, X_val, y_val, c = candidate, max_epochs = max_epochs)
+            candidate_model.fit(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs)
 
             # Predict parameters based on validation data
             parameter_tensor = candidate_model.predict_parameters(X_val)
@@ -348,16 +355,21 @@ class NAMLSS(nn.Module):
             expected_quantiles = torch.linspace((1 - central_proportion)/2, 1 - (1 - central_proportion)/2, len(truncated_y_cdf), device = truncated_y_cdf.device)
             qq_mse = torch.sum((truncated_y_cdf - expected_quantiles)**2) / len(truncated_y_cdf)
 
+            penalty_mse_list.append({"c":penalty_candidate, "qq_mse":qq_mse.item()})
+
             if verbose:
-                print(f"Candidate c = {candidate}: Truncated QQ MSE = {qq_mse.item():.6f}")
+                print(f"Candidate c = {penalty_candidate}: Truncated QQ MSE = {qq_mse.item():.6f}")
 
             # save candidate if it improves over current MSE
             if qq_mse < best_mse:
                 best_mse = qq_mse
-                best_penalty = candidate
+                best_penalty = penalty_candidate
                 best_state_dict = candidate_model._snapshot_model_state()
                 self.X_mean = candidate_model.X_mean
                 self.X_std = candidate_model.X_std
+                self.chosen_c = penalty_candidate
+
+        self.penalty_mse_list = penalty_mse_list
 
         if verbose:
             print(f"best penalty identified as c = {best_penalty}")
