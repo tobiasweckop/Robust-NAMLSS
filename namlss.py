@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import distributions
 from distributions import Distribution
 
+
 class NAMLSS(nn.Module):
 
     def __init__(self, formula = None, n_covariates = None, distribution = None, numeric_mask = None, global_param_list = None, hidden_size = 8):
@@ -323,7 +324,7 @@ class NAMLSS(nn.Module):
         if penalty_list is not None:
             penalty_list = penalty_list
         else:
-            penalty_list = [None] + np.round(np.arange(6.1, 1, -0.1),1).tolist()  # creates list of penalties to test
+            penalty_list = [None] + np.round(np.arange(7.0, 1, -0.1),1).tolist()  # creates list of penalties to test
 
         best_mse = float("inf")
         penalty_mse_list = []
@@ -544,3 +545,4 @@ class NAMLSS(nn.Module):
         plt.legend()
         plt.tight_layout()
         plt.show()
+
