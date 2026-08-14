@@ -465,31 +465,34 @@ class NAMLSS(nn.Module):
         central_mask = central_mask
         truncated_y_cdf = y_cdf_sorted[central_mask]
 
+        fig, ax = plt.subplots(figsize=(5.5, 3.8), dpi=300)
+
         # Plot the histogram
-        counts, bins, _ = plt.hist(truncated_y_cdf, bins = 100, density = True, alpha = 0.6)
+        counts, bins, _ = ax.hist(truncated_y_cdf, bins = 50, density = True, alpha = 0.7, edgecolor = "black", linewidth = 0.5)
 
         if central_proportion < 1:
             # Add vertical lines to mark central interval
-            plt.axvline(lower_bound, color = "red", linewidth = 2, label = "central interval bounds")
-            plt.axvline(upper_bound, color = "red", linewidth = 2)
+            ax.axvline(lower_bound, color = "tab:red", linewidth = 1.5, label = "Central interval")
+            ax.axvline(upper_bound, color = "tab:red", linewidth = 1.5)
 
-        # Average histogram height within the interval
-        bin_centers = 0.5 * (bins[:-1] + bins[1:])
-        inside = (bin_centers >= lower_bound) & (bin_centers <= upper_bound)
-        avg_height = counts[inside].mean()
+        # Calculate expected uniform density over the central interval
+        expected_density = 1 / (upper_bound - lower_bound)
 
         # Calculate quantile MSE
         expected_quantiles = torch.linspace((1 - central_proportion)/2, 1 - (1 - central_proportion)/2, len(truncated_y_cdf), device = truncated_y_cdf.device)
-        qq_mse = torch.sum((truncated_y_cdf - expected_quantiles)**2) / len(truncated_y_cdf)
+        qq_mse = torch.mean((truncated_y_cdf - expected_quantiles)**2)
 
         # Add horizontal line to show expected bar height inside central interval
-        plt.hlines(avg_height, xmin = lower_bound, xmax = upper_bound, color="red", linestyle = "--",  linewidth=2, label="Average Expected Density")
-        plt.ylim((0, 4 * avg_height))
+        ax.hlines(expected_density, xmin = lower_bound, xmax = upper_bound, color="black", linestyle = "--",  linewidth=1.5, label="Uniform PIT Density")
+        ax.set_ylim((0, 4 * expected_density))
 
-        plt.xlabel("CDF values")
-        plt.ylabel("Density of Estimated Quantiles")
-        plt.title(f"Histogram of CDF values against expected PIT-density.")
-        plt.legend()
+        ax.set_xlabel("PIT value", fontsize=11)
+        ax.set_ylabel("Density", fontsize=11)
+        ax.set_title(rf"PIT histogram ($\mathrm{{MSE}} = {qq_mse.item():.2e}$)", fontsize = 11)
+        ax.tick_params(labelsize=10)
+        ax.legend(frameon=False, fontsize=9)
+
+        fig.tight_layout()
         plt.show()
 
 
@@ -498,12 +501,23 @@ class NAMLSS(nn.Module):
         if self.distribution != distributions.Normal:
             raise ValueError(f"This diagnostic is only available for Normal models, but the current distribution is {self.distribution}.")
 
-        device = self.predict_parameters(X).device
+        if y_observed.ndim == 2:
+            assert y_observed.shape[1] == 1
+            y_observed = y_observed.squeeze(1)
 
-        standard_normal_tensor = torch.tensor([[0.0, 1.0]], device=device)
+        # Get predicted distribution parameters
+        parameter_tensor = self.predict_parameters(X)
 
-        p_low = torch.tensor([(1 - central_proportion) / 2], device=device)
-        p_high = torch.tensor([(1 + central_proportion) / 2], device=device)
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        # Standardized residuals
+        residuals = (y_observed - mu) / sigma
+
+        standard_normal_tensor = torch.tensor([[0.0, 1.0]])
+
+        p_low = torch.tensor([(1 - central_proportion) / 2])
+        p_high = torch.tensor([(1 + central_proportion) / 2])
 
         # Correct ordering
         lower_bound = distributions.Normal.icdf(parameter_tensor = standard_normal_tensor, p = p_low).item()
@@ -532,7 +546,7 @@ class NAMLSS(nn.Module):
 
         plt.bar(bin_centers, rescaled_bars, width = bin_widths, alpha = 0.6, label = "Standardized Residuals")
 
-        x = torch.linspace(-4, 4, 500, device=device)
+        x = torch.linspace(-4, 4, 500)
         parameters = standard_normal_tensor.repeat(len(x), 1)
         pdf = distributions.Normal.pdf(parameters, x)
 
@@ -540,6 +554,7 @@ class NAMLSS(nn.Module):
 
         plt.xlabel("Residuals")
         plt.ylabel("Rescaled Density")
+        plt.xlim((-6, 6))
         plt.ylim((0, 0.6))
         plt.title(title if title is not None else "Standardized Residual Plot")
         plt.legend()
