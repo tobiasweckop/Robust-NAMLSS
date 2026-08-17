@@ -9,7 +9,7 @@ from distributions import Distribution
 
 class NAMLSS(nn.Module):
 
-    def __init__(self, formula = None, n_covariates = None, distribution = None, numeric_mask = None, global_param_list = None, hidden_size = 8):
+    def __init__(self, formula = None, n_covariates = None, distribution = None, numeric_mask = None, global_param_list = None, hidden_size = 16):
 
         '''
         Initializes the NAMLSS model.
@@ -31,7 +31,7 @@ class NAMLSS(nn.Module):
 
         # initialize class attributes
         self.c = None
-        self.penalty_mse_list = None
+        self.penalty_mse_dict = None
 
         # initialize torch.nn.Module
         super(NAMLSS, self).__init__()
@@ -57,12 +57,12 @@ class NAMLSS(nn.Module):
 
     def _resolve_distribution(self, distribution):
         if distribution is None:
-            raise ValueError("Distribution must be specified.")
+            raise ValueError(f"Distribution must be specified. Available distributions: {list(Distribution.registry.keys())}.")
 
         try:
             return Distribution.registry[distribution.lower()]
         except KeyError:
-            raise ValueError(f"Distribution '{distribution}' is not available. Please choose from: {list(Distribution.registry.keys())}.")
+            raise ValueError(f"Distribution '{distribution}' is not available. Available distributions: {list(Distribution.registry.keys())}.")
 
 
     def _check_formula(self, formula, n_covariates):
@@ -257,7 +257,6 @@ class NAMLSS(nn.Module):
         '''
 
         X_train_standardized, y_train, X_val_standardized, y_val, c = self._prepare_inputs(X_train, y_train, X_val, y_val, starting_weights, c)
-
         self.chosen_c = c
 
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
@@ -311,7 +310,120 @@ class NAMLSS(nn.Module):
         return self
 
 
-    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, penalty_list = None, max_epochs = 10000, verbose = False, plot = False):
+    def fit_batches(self, X_train, y_train, X_val=None, y_val=None, max_epochs=10000, lr=5e-3, weight_decay=0.0, 
+                    early_stopping_patience=10, c=None, starting_weights=None, verbose=False, batch_size=None, shuffle=True):
+        '''
+        Expects raw covariates and response. Standardizes X internally before optimizing.
+        If validation data are provided, early stopping is used.
+
+        batch_size:
+            None -> full-batch training, without DataLoader
+            integer -> mini-batch training using DataLoader
+
+        shuffle:
+            Only relevant for mini-batch training.
+        '''
+
+        # Prepare inputs
+        X_train_standardized, y_train, X_val_standardized, y_val, c = (self._prepare_inputs(X_train, y_train, X_val, y_val, starting_weights, c))
+        self.chosen_c = c
+
+        # Set up optimizer
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
+
+        # Create batches
+        if batch_size is not None:
+
+            train_dataset = torch.utils.data.TensorDataset(X_train_standardized, y_train)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
+            train_dataset_size = len(train_dataset)
+
+        else:
+            train_loader = None
+            train_dataset_size = X_train_standardized.shape[0]
+
+        best_val_loss = float('inf')
+        patience_counter = 0
+        best_model_state = None
+
+
+        for epoch in range(max_epochs):
+
+            self.train()
+
+            # Full batch training
+            if train_loader is None:
+
+                parameter_tensor = self._forward(X_train_standardized)
+                train_loss = self.distribution.nll_loss(parameter_tensor, y_train, c)
+
+                optimizer.zero_grad()
+                train_loss.backward()
+                optimizer.step()
+
+                train_loss_value = train_loss.item()
+
+            # Mini batch training
+            else:
+                epoch_loss = 0.0
+
+                for X_batch, y_batch in train_loader:
+
+                    parameter_tensor = self._forward(X_batch)
+                    batch_loss = self.distribution.nll_loss(parameter_tensor, y_batch, c)
+
+                    optimizer.zero_grad()
+                    batch_loss.backward()
+                    optimizer.step()
+
+                    epoch_loss += (batch_loss.item() * X_batch.shape[0])
+
+                train_loss_value = (epoch_loss / train_dataset_size)
+
+
+            val_loss = None
+
+            if X_val_standardized is not None and y_val is not None:
+
+                self.eval()
+
+                with torch.no_grad():
+
+                    parameter_validation_tensor = self._forward(X_val_standardized)
+
+                    val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c).item()
+
+
+                if val_loss < best_val_loss:
+
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                    best_model_state = self._snapshot_model_state()
+
+                else:
+                    patience_counter += 1
+
+                if patience_counter >= early_stopping_patience:
+
+                    if verbose:
+                        print(f"Validation loss did not improve for {early_stopping_patience} epochs. Early stopping at epoch {epoch}.")
+
+                    self.load_state_dict(best_model_state)
+                    break
+
+
+            if epoch % 100 == 0 and verbose:
+                if val_loss is not None:
+
+                    print(f"Epoch {epoch} - Train Loss: {train_loss_value:.4f} - Val Loss: {val_loss:.4f}")
+
+                else:
+                    print(f"Epoch {epoch} - Train Loss: {train_loss_value:.4f}")
+
+        return self
+    
+
+    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, penalty_list = None, max_epochs = 10000, verbose = False, batch_size = None, plot = False):
 
         if y_train.ndim == 2:
             assert y_train.shape[1] == 1
@@ -327,14 +439,15 @@ class NAMLSS(nn.Module):
             penalty_list = [None] + np.round(np.arange(7.0, 1, -0.1),1).tolist()  # creates list of penalties to test
 
         best_mse = float("inf")
-        penalty_mse_list = []
+        self.penalty_mse_dict = {}
 
         candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = self.hidden_size)
 
         for penalty_candidate in penalty_list:
 
             # Fit the model
-            candidate_model.fit(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs)
+            # candidate_model.fit(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
+            candidate_model.fit_batches(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
 
             # Predict parameters based on validation data
             parameter_tensor = candidate_model.predict_parameters(X_val)
@@ -356,7 +469,12 @@ class NAMLSS(nn.Module):
             expected_quantiles = torch.linspace((1 - central_proportion)/2, 1 - (1 - central_proportion)/2, len(truncated_y_cdf), device = truncated_y_cdf.device)
             qq_mse = torch.sum((truncated_y_cdf - expected_quantiles)**2) / len(truncated_y_cdf)
 
-            penalty_mse_list.append({"c":penalty_candidate, "qq_mse":qq_mse.item()})
+            if penalty_candidate is None: 
+                penalty_candidate_name = "No penalty"
+            else:
+                penalty_candidate_name = penalty_candidate
+
+            self.penalty_mse_dict[penalty_candidate_name] = qq_mse.item()
 
             if verbose:
                 print(f"Candidate c = {penalty_candidate}: Truncated QQ MSE = {qq_mse.item():.6f}")
@@ -370,7 +488,6 @@ class NAMLSS(nn.Module):
                 self.X_std = candidate_model.X_std
                 self.chosen_c = penalty_candidate
 
-        self.penalty_mse_list = penalty_mse_list
 
         if verbose:
             print(f"best penalty identified as c = {best_penalty}")
@@ -415,7 +532,123 @@ class NAMLSS(nn.Module):
             transformed_parameter_tensor = self.distribution.transform(stacked_array)
 
         return transformed_parameter_tensor
-    
+
+
+    def plot_marginal_effects(self, X, covariate_indices = None, feature_names = None, parameter_names = None, show=True):
+
+        # Ensure correct input shape
+        if X.dim() == 1:
+            X = X.unsqueeze(0)
+
+        # Get marginal effects
+        marginal_tensor = self.marginal_effects(X)
+
+        # Convert to NumPy
+        marginal_np = marginal_tensor.detach().cpu().numpy()
+
+        n_observations, n_terms, n_parameters = marginal_np.shape
+
+        # Select terms to plot
+        if covariate_indices is None:
+            covariate_indices = list(range(n_terms))
+        else:
+            covariate_indices = list(covariate_indices)
+
+        # Check term indices
+        invalid_indices = [i for i in covariate_indices if i < 0 or i >= n_terms]
+
+        if len(invalid_indices) > 0:
+            raise ValueError(f"Invalid term indices {invalid_indices}. Valid term indices are 0 to {n_terms - 1}.")
+
+        if len(covariate_indices) == 0:
+            raise ValueError("variables_to_plot must contain at least one term.")
+
+        # Parameter names
+        if parameter_names is None:
+            if self.distribution == distributions.Normal and n_parameters == 2:
+                parameter_names = [r"$\mu$", r"$\sigma$"]
+            else:
+                parameter_names = [f"Parameter {i + 1}" for i in range(n_parameters)]
+
+        if len(parameter_names) != n_parameters:
+            raise ValueError(f"parameter_names contains {len(parameter_names)} names, but the model has {n_parameters} distribution parameters.")
+
+
+        marginal_np = marginal_np - marginal_np.mean(axis=0, keepdims=True)
+
+        # Determine common y-axis limits for each parameter
+        y_limits = []
+
+        for parameter_idx in range(n_parameters):
+            values = marginal_np[:, covariate_indices, parameter_idx]
+            max_abs = np.max(np.abs(values))
+            if max_abs == 0:
+                max_abs = 1.0
+            y_limits.append(max_abs * 1.05)
+
+
+        figsize = (5 * len(covariate_indices), 3.2 * n_parameters)
+
+        fig, axes = plt.subplots(n_parameters, len(covariate_indices), figsize=figsize, squeeze=False)
+
+        # Plot each term
+        for plot_column, term_idx in enumerate(covariate_indices):
+
+            term = self.terms[term_idx]
+            covariate_matrix = X[:, term]
+
+            # Determine x-axis
+            if len(term) == 1:
+                x_values = covariate_matrix.squeeze(1).detach().cpu().numpy()
+                sorting_indices = np.argsort(x_values)
+                x_sorted = x_values[sorting_indices]
+            else:
+                sorting_indices = np.arange(len(X))
+                x_sorted = np.arange(len(X))
+
+            # Determine feature name
+            if feature_names is None:
+                if len(term) == 1:
+                    feature_name = f"X{term[0]}"
+                else:
+                    feature_name = " × ".join(f"X{i}" for i in term)
+            else:
+                feature_name = " × ".join(feature_names[i] for i in term)
+
+            # Plot each distribution parameter
+            for parameter_idx in range(n_parameters):
+
+                ax = axes[parameter_idx, plot_column]
+
+                y_values = marginal_np[:, term_idx, parameter_idx]
+                y_sorted = y_values[sorting_indices]
+
+                ax.plot(x_sorted, y_sorted, linewidth=2.5)
+
+                ax.set_xlabel(feature_name, fontsize=14)
+
+                if plot_column == 0:
+                    ax.set_ylabel("Centered Contribution", fontsize=14)
+                else:
+                    ax.set_ylabel("")
+
+                ax.set_ylim(-y_limits[parameter_idx], y_limits[parameter_idx])
+                ax.tick_params(axis="both", labelsize=14 - 2)
+                ax.grid(alpha=0.3)
+
+        # Add parameter labels on the left
+        for parameter_idx, parameter_name in enumerate(parameter_names):
+            axes[parameter_idx, 0].text(-0.25, 0.5, parameter_name, transform=axes[parameter_idx, 0].transAxes, ha="center", va="center", fontsize= 14 + 6)
+
+        # Layout
+        fig.tight_layout()
+
+        # Display figure
+        if show:
+            plt.show()
+
+        return fig, axes
+
 
     def predict_quantiles(self, X, probabilities):
 
@@ -511,24 +744,15 @@ class NAMLSS(nn.Module):
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
 
-        # Standardized residuals
-        residuals = (y_observed - mu) / sigma
-
         standard_normal_tensor = torch.tensor([[0.0, 1.0]])
+        std_residuals = (y_observed - mu) / sigma
 
         p_low = torch.tensor([(1 - central_proportion) / 2])
         p_high = torch.tensor([(1 + central_proportion) / 2])
 
         # Correct ordering
         lower_bound = distributions.Normal.icdf(parameter_tensor = standard_normal_tensor, p = p_low).item()
-
         upper_bound = distributions.Normal.icdf(parameter_tensor = standard_normal_tensor, p = p_high).item()
-
-        parameter_tensor = self.predict_parameters(X)
-        mu = parameter_tensor[:, 0]
-        sigma = parameter_tensor[:, 1]
-
-        std_residuals = (y_observed - mu) / sigma
 
         # Histogram requires NumPy
         residuals_np = std_residuals
@@ -560,4 +784,3 @@ class NAMLSS(nn.Module):
         plt.legend()
         plt.tight_layout()
         plt.show()
-
