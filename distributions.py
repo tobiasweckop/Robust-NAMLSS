@@ -12,7 +12,7 @@ class Distribution:
 
     def __init_subclass__(cls, **kwargs):
         
-        # This currently does nothing.
+        # Only here because of conventions
         super().__init_subclass__(**kwargs)
 
         # Registers the subclass in the registry
@@ -71,7 +71,7 @@ class Normal(Distribution):
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
 
-        y_pdf = 1/(torch.sqrt(2 * torch.pi) * sigma) * torch.exp(-(y - mu)**2 / (2 * sigma**2))
+        y_pdf = 1/(math.sqrt(2 * torch.pi) * sigma) * torch.exp(-(y - mu)**2 / (2 * sigma**2))
 
         return y_pdf
 
@@ -377,9 +377,6 @@ class BCCG(Distribution):
 
         # Correct z, if nu is too close to zero
         z = torch.where(abs(nu) <= eps, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
-
-        # replaced by code below because of numerical stability concerns
-        # standard_normal_term = cls.standard_normal.cdf(1/(sigma * torch.where(torch.abs(nu) < eps, eps, torch.abs(nu))))
 
         standard_normal_denominator = sigma * torch.clamp(torch.abs(nu), min=eps)
         standard_normal_term = cls.standard_normal.cdf(1 / standard_normal_denominator)
