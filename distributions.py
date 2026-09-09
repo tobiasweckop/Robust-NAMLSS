@@ -1,7 +1,10 @@
 import math
 import torch
 import numpy as np
+
 from scipy import stats
+from scipy.integrate import quad
+
 import torch.nn.functional as F
 from torch.distributions import Gamma as torch_gamma
 from torch.distributions import Normal as torch_normal
@@ -74,6 +77,14 @@ class Normal(Distribution):
         y_pdf = 1/(math.sqrt(2 * torch.pi) * sigma) * torch.exp(-(y - mu)**2 / (2 * sigma**2))
 
         return y_pdf
+
+    @classmethod
+    def log_likelihood(cls, parameter_tensor, y): # can be more numerically stable than pdf
+
+        mu = parameter_tensor[:, 0]
+        sigma = parameter_tensor[:, 1]
+
+        return (-0.5 * torch.log(2 * torch.pi) - torch.log(sigma) - 0.5 * ((y - mu) / sigma)**2)
 
     @classmethod
     def nll_loss(cls, parameter_tensor, y, c = None):
