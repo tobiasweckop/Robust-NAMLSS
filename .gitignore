@@ -59,3 +59,29 @@ paper 1 simulation/results/symmetrical_0_20k.pkl
 paper 1 simulation/namlss_code.zip
 Simulation.ipynb
 Werkstatt.ipynb
+bias correction/__pycache__/data.cpython-314.pyc
+bias correction/__pycache__/distributions.cpython-314.pyc
+bias correction/__pycache__/metrics.cpython-314.pyc
+bias correction/__pycache__/namlss.cpython-314.pyc
+bias correction/__pycache__/plots.cpython-314.pyc
+bias correction/__pycache__/simulations.cpython-314.pyc
+bias correction/Bias Correction.pptx
+bias correction/Bias over c, 10% symmetrical corruption.png
+bias correction/Bias_Simulation.ipynb
+bias correction/data.py
+bias correction/distributions.py
+bias correction/integrals.ipynb
+bias correction/metrics.py
+bias correction/n = 10,000, k = 100, c = 7, bias_corrected.png
+bias correction/n = 10,000, k = 30, c = 7, uncorrected.png
+bias correction/n = 100,000, k = 30, c = 7, uncorrected.png
+bias correction/n = 20,000, k = 30, c = 7, bias_corrected.png
+bias correction/n = 20,000, k = 30, c = 7, uncorrected.png
+bias correction/namlss.py
+bias correction/Paper Tabelle.png
+bias correction/plots.py
+bias correction/results/symmetrical_10_bias_corrected.pkl
+bias correction/results/symmetrical_20_bias_corrected.pkl
+bias correction/simulations.py
+bias correction/symmetrical_20, n = 10,000, k = 100, bias_corrected.png
+bias correction/symmetrical_20, n = 10,000, k = 100, uncorrected.png
