@@ -446,8 +446,8 @@ class NAMLSS(nn.Module):
         for penalty_candidate in penalty_list:
 
             # Fit the model
-            # candidate_model.fit(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
             candidate_model.fit_batches(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
+            # candidate_model.fit_batches(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
 
             # Predict parameters based on validation data
             parameter_tensor = candidate_model.predict_parameters(X_val)
@@ -499,6 +499,236 @@ class NAMLSS(nn.Module):
 
         if plot:
             self.plot_PIT(X_val, y_val, central_proportion)
+
+
+    def robust_fit_grid(self, X_train, y_train, X_val, y_val, central_proportion_list=None, penalty_list=None, max_epochs=10000, verbose=False, batch_size=None, plot=False):
+
+        ''' 
+        Evaluates PIT performance for a list of robustness penalties across multiple central_proportion values.
+        Calculates relative regret for each c across central proportions and selects the c
+        with the lowest median relative regret as the final penalty.
+        '''
+
+        if y_train.ndim == 2:
+            assert y_train.shape[1] == 1
+            y_train = y_train.squeeze(1)
+
+        if y_val.ndim == 2:
+            assert y_val.shape[1] == 1
+            y_val = y_val.squeeze(1)
+
+        if central_proportion_list is None:
+            central_proportion_list = [0.80, 0.90, 0.95]
+
+        central_proportion_list = sorted(central_proportion_list)
+
+        if penalty_list is not None:
+            penalty_list = penalty_list
+        else:
+            penalty_list = [None] + np.round(np.arange(7.0, 0, -0.1), 1).tolist()
+
+        self.penalty_mse_dict = {}
+        self.best_c_by_central_proportion = {}
+        self.best_mse_by_central_proportion = {}
+
+        for central_proportion in central_proportion_list:
+
+            self.penalty_mse_dict[central_proportion] = {}
+
+            best_mse = float("inf")
+            best_penalty = None
+
+            if verbose:
+                print(f"\n===== Central proportion = {central_proportion:.2f} =====")
+
+            candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list=self.global_param_list, hidden_size=self.hidden_size)
+
+            for penalty_candidate in penalty_list:
+
+                candidate_model.fit_batches(X_train, y_train, X_val, y_val, c=penalty_candidate, max_epochs=max_epochs, batch_size=batch_size)
+
+                parameter_tensor = candidate_model.predict_parameters(X_val)
+
+                y_cdf = self.distribution.cdf(parameter_tensor, y_val)
+                y_cdf_sorted = torch.sort(y_cdf).values
+
+                lower_bound = (1 - central_proportion) / 2
+                upper_bound = 1 - lower_bound
+
+                central_mask = (y_cdf_sorted >= lower_bound) & (y_cdf_sorted <= upper_bound)
+                truncated_y_cdf = y_cdf_sorted[central_mask]
+
+                expected_quantiles = torch.linspace(lower_bound, upper_bound, len(truncated_y_cdf), device=truncated_y_cdf.device)
+                qq_mse = torch.mean((truncated_y_cdf - expected_quantiles) ** 2)
+
+                penalty_candidate_name = "No penalty" if penalty_candidate is None else penalty_candidate
+
+                self.penalty_mse_dict[central_proportion][penalty_candidate_name] = qq_mse.item()
+
+                if verbose:
+                    print(f"Candidate c = {penalty_candidate}: Truncated QQ MSE = {qq_mse.item():.6f}")
+
+                if qq_mse.item() < best_mse:
+                    best_mse = qq_mse.item()
+                    best_penalty = penalty_candidate
+
+            self.best_c_by_central_proportion[central_proportion] = best_penalty
+            self.best_mse_by_central_proportion[central_proportion] = best_mse
+
+            if verbose:
+                print(f"Best c for central proportion {central_proportion:.2f}: {best_penalty}")
+
+        self.central_proportion_results = []
+
+        for central_proportion in central_proportion_list:
+            self.central_proportion_results.append({"central_proportion": central_proportion, "best_c": self.best_c_by_central_proportion[central_proportion], "best_qq_mse": self.best_mse_by_central_proportion[central_proportion]})
+
+        if verbose:
+            print("\n===== Summary =====")
+            for central_proportion in central_proportion_list:
+                print(f"Central proportion = {central_proportion:.2f} | Best c = {self.best_c_by_central_proportion[central_proportion]} | QQ-MSE = {self.best_mse_by_central_proportion[central_proportion]:.6f}")
+
+
+        ########## Calculate relative regret ##########
+
+        common_c_values = None
+        regret_matrix = []
+
+        for central_proportion in central_proportion_list:
+
+            c_values = []
+            mse_values = []
+
+            for penalty_name, mse in self.penalty_mse_dict[central_proportion].items():
+
+                if penalty_name == "No penalty":
+                    continue
+
+                c_values.append(float(penalty_name))
+                mse_values.append(mse)
+
+            order = np.argsort(c_values)
+
+            c_values = np.array(c_values)[order]
+            mse_values = np.array(mse_values)[order]
+
+            if common_c_values is None:
+                common_c_values = c_values
+            else:
+                assert np.array_equal(common_c_values, c_values), "Penalty grids differ between central proportions."
+
+            minimum_mse = np.min(mse_values)
+
+            relative_regret = mse_values / minimum_mse
+
+            regret_matrix.append(relative_regret)
+
+        regret_matrix = np.array(regret_matrix)
+
+        self.relative_regret_matrix = regret_matrix
+        self.relative_regret_c_values = common_c_values
+
+        self.mean_relative_regret = np.mean(regret_matrix, axis=0)
+        self.median_relative_regret = np.median(regret_matrix, axis=0)
+
+        best_mean_c = common_c_values[np.argmin(self.mean_relative_regret)]
+        best_median_c = common_c_values[np.argmin(self.median_relative_regret)]
+
+        self.best_mean_regret_c = best_mean_c
+        self.best_median_regret_c = best_median_c
+
+        ########## Choose final c using lowest median relative regret ##########
+
+        final_c = best_median_c
+        self.chosen_c = final_c
+
+        if verbose:
+            print("\n===== Relative regret summary =====")
+            print(f"Best c by mean relative regret: c = {best_mean_c:.1f}")
+            print(f"Best c by median relative regret: c = {best_median_c:.1f}")
+            print(f"Final selected c: c = {final_c:.1f}")
+
+
+        ########## Fit final model using selected c ##########
+
+        final_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list=self.global_param_list, hidden_size=self.hidden_size)
+
+        final_model.fit_batches(X_train, y_train, X_val, y_val, c=final_c, max_epochs=max_epochs, batch_size=batch_size)
+
+        best_state_dict = final_model._snapshot_model_state()
+
+        self.X_mean = final_model.X_mean
+        self.X_std = final_model.X_std
+
+        self.load_state_dict(best_state_dict)
+
+        if verbose:
+            print(f"\nFinal c = {self.chosen_c}")
+            print("Final model state loaded.")
+
+
+        ########## Plot results ##########
+
+        if plot:
+
+            import matplotlib.pyplot as plt
+
+            fig, axes = plt.subplots(2, 1, figsize=(10, 10))
+
+
+            ########## Plot 1: Raw QQ-MSE ##########
+
+            for central_proportion in central_proportion_list:
+
+                c_values = []
+                mse_values = []
+
+                for penalty_name, mse in self.penalty_mse_dict[central_proportion].items():
+
+                    if penalty_name == "No penalty":
+                        continue
+
+                    c_values.append(float(penalty_name))
+                    mse_values.append(mse)
+
+                order = np.argsort(c_values)
+
+                c_values = np.array(c_values)[order]
+                mse_values = np.array(mse_values)[order]
+
+                axes[0].plot(c_values, mse_values, label=f"Central proportion = {central_proportion:.2f}")
+
+                best_c = self.best_c_by_central_proportion[central_proportion]
+
+                if best_c is not None:
+                    axes[0].scatter(best_c, self.best_mse_by_central_proportion[central_proportion], s=80)
+
+            axes[0].set_xlabel("Penalty c")
+            axes[0].set_ylabel("QQ-MSE")
+            axes[0].set_title("QQ-MSE across penalty values and central proportions")
+            axes[0].legend()
+            axes[0].grid(True, alpha=0.3)
+
+
+            ########## Plot 2: Relative regret ##########
+
+            for i, central_proportion in enumerate(central_proportion_list):
+                axes[1].plot(common_c_values, regret_matrix[i], label=f"Central proportion = {central_proportion:.2f}")
+
+            axes[1].plot(common_c_values, self.mean_relative_regret, color="black", linewidth=3, label="Mean relative regret")
+            axes[1].plot(common_c_values, self.median_relative_regret, color="black", linestyle="--", linewidth=2, label="Median relative regret")
+
+            axes[1].axvline(best_mean_c, color="black", linestyle=":", linewidth=2, label=f"Best mean regret: c = {best_mean_c:.1f}")
+            axes[1].axvline(best_median_c, color="gray", linestyle=":", linewidth=2, label=f"Best median regret: c = {best_median_c:.1f}")
+
+            axes[1].set_xlabel("Penalty c")
+            axes[1].set_ylabel("Relative QQ-MSE")
+            axes[1].set_title("Relative QQ-MSE across central proportions")
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            plt.show()
 
 
     def predict_parameters(self, X):
@@ -664,9 +894,12 @@ class NAMLSS(nn.Module):
         with torch.no_grad():
             parameter_tensor = self._forward(X_standardized)
 
-        for i in range(len(probabilities)):
-            y_quantiles = self.distribution.icdf(parameter_tensor, torch.tensor(probabilities[i]))
-            quantile_list.append(y_quantiles)
+            for i in range(len(probabilities)):
+
+                current_probability = torch.tensor(probabilities[i]).repeat(parameter_tensor.shape[0])
+
+                y_quantiles = self.distribution.icdf(parameter_tensor, torch.as_tensor(current_probability))
+                quantile_list.append(y_quantiles)
 
         return quantile_list
     
@@ -784,3 +1017,4 @@ class NAMLSS(nn.Module):
         plt.legend()
         plt.tight_layout()
         plt.show()
+
