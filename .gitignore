@@ -85,3 +85,85 @@ bias correction/results/symmetrical_20_bias_corrected.pkl
 bias correction/simulations.py
 bias correction/symmetrical_20, n = 10,000, k = 100, bias_corrected.png
 bias correction/symmetrical_20, n = 10,000, k = 100, uncorrected.png
+paper 1/__pycache__/data.cpython-312.pyc
+paper 1/__pycache__/data.cpython-314.pyc
+paper 1/__pycache__/distributions.cpython-312.pyc
+paper 1/__pycache__/distributions.cpython-314.pyc
+paper 1/__pycache__/functions.cpython-312.pyc
+paper 1/__pycache__/metrics.cpython-312.pyc
+paper 1/__pycache__/metrics.cpython-314.pyc
+paper 1/__pycache__/models.cpython-312.pyc
+paper 1/__pycache__/namlss.cpython-312.pyc
+paper 1/__pycache__/namlss.cpython-314.pyc
+paper 1/__pycache__/plots.cpython-312.pyc
+paper 1/__pycache__/plots.cpython-314.pyc
+paper 1/__pycache__/simulation.cpython-314.pyc
+paper 1/__pycache__/simulations.cpython-312.pyc
+paper 1/__pycache__/simulations.cpython-314.pyc
+paper 1/application_examples_new.ipynb
+paper 1/bias correction/__pycache__/data.cpython-314.pyc
+paper 1/bias correction/__pycache__/distributions.cpython-314.pyc
+paper 1/bias correction/__pycache__/metrics.cpython-314.pyc
+paper 1/bias correction/__pycache__/namlss.cpython-314.pyc
+paper 1/bias correction/__pycache__/plots.cpython-314.pyc
+paper 1/bias correction/__pycache__/simulations.cpython-314.pyc
+paper 1/bias correction/Bias Correction.pptx
+paper 1/bias correction/Bias over c, 10% symmetrical corruption.png
+paper 1/bias correction/Bias_Simulation.ipynb
+paper 1/bias correction/data.py
+paper 1/bias correction/distributions.py
+paper 1/bias correction/integrals.ipynb
+paper 1/bias correction/metrics.py
+paper 1/bias correction/n = 10,000, k = 100, c = 7, bias_corrected.png
+paper 1/bias correction/n = 10,000, k = 30, c = 7, uncorrected.png
+paper 1/bias correction/n = 100,000, k = 30, c = 7, uncorrected.png
+paper 1/bias correction/n = 20,000, k = 30, c = 7, bias_corrected.png
+paper 1/bias correction/n = 20,000, k = 30, c = 7, uncorrected.png
+paper 1/bias correction/namlss.py
+paper 1/bias correction/Paper Tabelle.png
+paper 1/bias correction/plots.py
+paper 1/bias correction/results/symmetrical_10_bias_corrected.pkl
+paper 1/bias correction/results/symmetrical_20_bias_corrected.pkl
+paper 1/bias correction/simulations.py
+paper 1/bias correction/symmetrical_20, n = 10,000, k = 100, bias_corrected.png
+paper 1/bias correction/symmetrical_20, n = 10,000, k = 100, uncorrected.png
+paper 1/california_residuals.pdf
+paper 1/data.py
+paper 1/distributions.py
+paper 1/metrics.py
+paper 1/namlss.py
+paper 1/namlss_code.zip
+paper 1/namtest.ipynb
+paper 1/plots.py
+paper 1/results/asymmetrical_10.pkl
+paper 1/results/asymmetrical_10_8_nodes.pkl
+paper 1/results/asymmetrical_20_8_nodes.pkl
+paper 1/results/hidden_16.pkl
+paper 1/results/hidden_32.pkl
+paper 1/results/hidden_4.pkl
+paper 1/results/hidden_8.pkl
+paper 1/results/symmetrical_0.pkl
+paper 1/results/symmetrical_0_20k.pkl
+paper 1/results/symmetrical_0_8_nodes.pkl
+paper 1/results/symmetrical_10.pkl
+paper 1/results/symmetrical_10_8_nodes.pkl
+paper 1/results/symmetrical_20.pkl
+paper 1/results/symmetrical_20_8_nodes.pkl
+paper 1/results/truncation_simulation.pkl
+paper 1/selected_housing_marginals.pdf
+paper 1/Simulation Setup.txt
+paper 1/Simulation_results.ipynb
+paper 1/simulations.py
+paper 2/__pycache__/distributions.cpython-314.pyc
+paper 2/__pycache__/namlss.cpython-314.pyc
+paper 2/data/aP-Anon.txt
+paper 2/data/Hb-Anon.txt
+paper 2/data/Hb-RIs.csv
+paper 2/data/Hemoglobin_preprocessed.csv
+paper 2/data/Krea-Anon.txt
+paper 2/distributions.py
+paper 2/Hemoglobin.ipynb
+paper 2/hemoglobin_female_best_relative_regret c = 0.6.png
+paper 2/hemoglobin_female_preprocessed.png
+paper 2/namlss.py
+paper 2/QQ-MSE and relative regret.png
