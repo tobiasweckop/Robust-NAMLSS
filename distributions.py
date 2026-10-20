@@ -56,6 +56,7 @@ class Normal(Distribution):
     def get_param_count(cls):
         return 2
 
+
     @classmethod
     def transform(cls, stacked_parameter_tensor):
 
@@ -65,6 +66,7 @@ class Normal(Distribution):
         transformed_tensor = torch.stack([mu, sigma], dim=2)
 
         return transformed_tensor
+
 
     @classmethod
     def pdf(cls, parameter_tensor, y):
@@ -78,16 +80,18 @@ class Normal(Distribution):
 
         return y_pdf
 
+
     @classmethod
     def log_likelihood(cls, parameter_tensor, y): # can be more numerically stable than pdf
 
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
-
+        
         return (-0.5 * torch.log(2 * torch.pi) - torch.log(sigma) - 0.5 * ((y - mu) / sigma)**2)
 
+
     @classmethod
-    def nll_loss(cls, parameter_tensor, y, c = None):
+    def nll_loss(cls, parameter_tensor, y, c = None, observation_weights = None):
 
         cls._verify_input_shapes(parameter_tensor, y)
 
@@ -97,11 +101,25 @@ class Normal(Distribution):
         normal_dist = torch_normal(mu, sigma)
         log_likelihood = normal_dist.log_prob(y)
 
+        # Calculate robust log-likelihood if c is given
         if c is not None:
             log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
 
+        # Apply observation weights, if provided
+        if observation_weights is not None:
+            if not isinstance(observation_weights, torch.Tensor):
+                observation_weights = torch.tensor(observation_weights)
+
+            if observation_weights.ndim != 1:
+                raise ValueError(f"Expected observation_weights to have shape (N,), got {tuple(observation_weights.shape)}.")
+            if parameter_tensor.shape[0] != observation_weights.shape[0]:
+                raise ValueError("Batch sizes do not match.")
+
+            log_likelihood = log_likelihood * observation_weights
+
         nll = -log_likelihood.mean()
         return nll
+
 
     @classmethod
     def cdf(cls, parameter_tensor, y):
@@ -115,6 +133,7 @@ class Normal(Distribution):
         y_cdf = normal_dist.cdf(y)
 
         return y_cdf
+
 
     @classmethod
     def icdf(cls, parameter_tensor, p):
@@ -131,6 +150,7 @@ class Normal(Distribution):
         y_icdf = normal_dist.icdf(p)
 
         return y_icdf
+
     
     @classmethod
     def sample(cls, parameter_tensor):
@@ -146,13 +166,16 @@ class Normal(Distribution):
         return samples
 
 
+
 class LogNormal(Distribution):
 
     standard_normal = torch_normal(0, 1)
 
+
     @classmethod
     def get_param_count(cls):
         return 2
+
 
     @classmethod
     def transform(cls, stacked_parameter_tensor):
@@ -166,6 +189,7 @@ class LogNormal(Distribution):
         transformed_tensor = torch.stack([mu, sigma], dim=2)
 
         return transformed_tensor
+
     
     @classmethod
     def pdf(cls, parameter_tensor, y):
@@ -179,8 +203,9 @@ class LogNormal(Distribution):
 
         return y_pdf
 
+
     @classmethod
-    def nll_loss(cls, parameter_tensor, y, c = None):
+    def nll_loss(cls, parameter_tensor, y, c = None, observation_weights = None):
 
         cls._verify_input_shapes(parameter_tensor, y)
 
@@ -194,11 +219,25 @@ class LogNormal(Distribution):
             - (torch.log(y) - mu)**2 / (2 * sigma**2)
         )
 
+        # Calculate robust log-likelihood if c is given
         if c is not None:
             log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
 
+        # Apply observation weights, if provided
+        if observation_weights is not None:
+            if not isinstance(observation_weights, torch.Tensor):
+                observation_weights = torch.tensor(observation_weights)
+
+            if observation_weights.ndim != 1:
+                raise ValueError(f"Expected observation_weights to have shape (N,), got {tuple(observation_weights.shape)}.")
+            if parameter_tensor.shape[0] != observation_weights.shape[0]:
+                raise ValueError("Batch sizes do not match.")
+
+            log_likelihood = log_likelihood * observation_weights
+
         nll = -log_likelihood.mean()
         return nll
+
     
     @classmethod
     def cdf(cls, parameter_tensor, y):
@@ -211,6 +250,7 @@ class LogNormal(Distribution):
         y_cdf = cls.standard_normal.cdf((torch.log(y) - mu) / sigma)
 
         return y_cdf
+
     
     @classmethod
     def icdf(cls, parameter_tensor, p):
@@ -221,10 +261,10 @@ class LogNormal(Distribution):
         sigma = parameter_tensor[:, 1]
 
         z_p = cls.standard_normal.icdf(p)
-
         y_icdf = torch.exp(mu + sigma * z_p)
 
         return y_icdf
+
     
     @classmethod
     def sample(cls, parameter_tensor):
@@ -243,6 +283,7 @@ class Gamma(Distribution):
     def get_param_count(cls):
         return 2
 
+
     @classmethod
     def transform(cls, stacked_parameter_tensor):
 
@@ -255,6 +296,7 @@ class Gamma(Distribution):
         transformed_tensor = torch.stack([alpha, theta], dim=2)
 
         return transformed_tensor
+
 
     @classmethod
     def pdf(cls, parameter_tensor, y):
@@ -270,8 +312,9 @@ class Gamma(Distribution):
 
         return y_pdf
 
+
     @classmethod
-    def nll_loss(cls, parameter_tensor, y, c = None):
+    def nll_loss(cls, parameter_tensor, y, c = None, observation_weights = None):
 
         cls._verify_input_shapes(parameter_tensor, y)
 
@@ -281,11 +324,25 @@ class Gamma(Distribution):
         gamma_dist = torch_gamma(alpha, 1/theta) # Note: Pytorch Gamma uses shape and rate (1/theta)
         log_likelihood = gamma_dist.log_prob(y)
 
+        # Calculate robust log-likelihood if c is given
         if c is not None:
             log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
 
+        # Apply observation weights, if provided
+        if observation_weights is not None:
+            if not isinstance(observation_weights, torch.Tensor):
+                observation_weights = torch.tensor(observation_weights)
+
+            if observation_weights.ndim != 1:
+                raise ValueError(f"Expected observation_weights to have shape (N,), got {tuple(observation_weights.shape)}.")
+            if parameter_tensor.shape[0] != observation_weights.shape[0]:
+                raise ValueError("Batch sizes do not match.")
+
+            log_likelihood = log_likelihood * observation_weights
+
         nll = -log_likelihood.mean()
         return nll
+
 
     @classmethod
     def cdf(cls, parameter_tensor, y):
@@ -299,6 +356,7 @@ class Gamma(Distribution):
         y_cdf = dist.cdf(y)
 
         return y_cdf
+
     
     @classmethod
     def icdf(cls, parameter_tensor, p):
@@ -316,6 +374,7 @@ class Gamma(Distribution):
 
         return y_icdf
 
+
     @classmethod
     def sample(cls, parameter_tensor):
 
@@ -327,13 +386,15 @@ class Gamma(Distribution):
         return cls.icdf(parameter_tensor, probabilities)
 
 
-class BCCG(Distribution):
 
+class BCCG(Distribution):
+    
     standard_normal = torch_normal(0, 1)
 
     @classmethod
     def get_param_count(cls):
         return 3
+
     
     @classmethod
     def transform(cls, stacked_parameter_tensor):
@@ -350,106 +411,125 @@ class BCCG(Distribution):
 
         return transformed_tensor
 
+
     @classmethod
     def pdf(cls, parameter_tensor, y):
 
         cls._verify_input_shapes(parameter_tensor, y)
 
-        mu = parameter_tensor[:, 0]
-        sigma = parameter_tensor[:, 1]
-        nu = parameter_tensor[:, 2]
-
-        # not sure if this needs to be numerically stabilized
-        z = torch.where(nu == 0, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
-
-        # Compute the PDF
-        y_pdf = y**(nu - 1) * torch.exp(-1/2 * z**2) / (mu**nu * sigma * torch.sqrt(2 * torch.pi) * (1/sigma * abs(nu)))
-
-        return y_pdf
 
     @classmethod
-    def nll_loss(cls, parameter_tensor, y, c = None):
+    def nll_loss(cls, parameter_tensor, y, c = None, observation_weights = None):
 
         cls._verify_input_shapes(parameter_tensor, y)
 
-        eps = 1e-6
+        mu = parameter_tensor[:,0]
+        sigma = parameter_tensor[:,1]
+        nu = parameter_tensor[:,2]
 
-        # Extract parameters
-        mu = parameter_tensor[:, 0]
-        sigma = parameter_tensor[:, 1]
-        nu = parameter_tensor[:, 2]
+        z = torch.empty_like(y)
+        z[nu != 0] = ((((y[nu != 0] / mu[nu != 0])**nu[nu != 0])-1) / (nu[nu != 0] * sigma[nu != 0]))
+        z[nu == 0] = torch.log(y[nu == 0]/mu[nu == 0])/sigma[nu == 0]
 
-        # Prevent numerically unstable values
-        y = torch.clamp(y, min = eps)
-        mu = torch.clamp(mu, min = eps)
-        sigma = torch.clamp(sigma, min = eps)
-        nu = torch.clamp(nu, min = -10.0, max = 10.0)
-        nu = torch.where(abs(nu) <= eps, eps, nu)
+        log_phi = torch.zeros_like(nu)
+        log_phi[nu != 0] = torch.special.log_ndtr(1/(sigma[nu != 0] * torch.abs(nu[nu != 0])))
 
-        # Correct z, if nu is too close to zero
-        z = torch.where(abs(nu) <= eps, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
+        log_likelihood = nu * torch.log(y/mu) - torch.log(sigma) - (z*z)/2 -torch.log(y) -(math.log(2*math.pi))/2 - log_phi
 
-        standard_normal_denominator = sigma * torch.clamp(torch.abs(nu), min=eps)
-        standard_normal_term = cls.standard_normal.cdf(1 / standard_normal_denominator)
-        standard_normal_term = torch.clamp(standard_normal_term, min=eps)
-
-        log_likelihood = ((nu - 1) * torch.log(y) 
-                          - 1/2 * z**2 
-                          - nu * torch.log(mu) 
-                          - torch.log(sigma) 
-                          - 1/2 * torch.log(torch.tensor(2*torch.pi)) 
-                          - torch.log(standard_normal_term))
-        
         if c is not None:
-            log_likelihood = torch.log((1 + torch.exp(log_likelihood + c)) / (1 + torch.exp(c)))
-        
-        nll = -log_likelihood.mean()
+            log_likelihood = torch.nn.functional.softplus(log_likelihood + c) - torch.nn.functional.softplus(c)
+
+        if observation_weights is not None:
+            log_likelihood = log_likelihood * observation_weights
+
+        nll = - log_likelihood.mean()
+
         return nll
 
-    @classmethod
-    def cdf(cls, parameter_tensor, y):
 
-        cls._verify_input_shapes(parameter_tensor, y)
+    @classmethod
+    def cdf(cls, parameter_tensor, q):
+
+        #TODO: handle q == 0 correctly. I really dont want to implement this right now, but it should be done at some point.
+
+        cls._verify_input_shapes(parameter_tensor)
 
         mu = parameter_tensor[:, 0]
         sigma = parameter_tensor[:, 1]
         nu = parameter_tensor[:, 2]
 
-        normal = torch_normal(0, 1)
-        z = torch.where(nu == 0, 1/sigma * torch.log(y/mu), 1/(sigma * nu) * ((y/mu)**nu - 1))
+        q = torch.as_tensor(q)
 
-        y_cdf = normal.cdf(z)
+        # Allow a single q or one q per parameter row
+        if q.ndim == 0:
+            q = q.expand_as(mu)
+        elif q.ndim != 1 or q.shape != mu.shape:
+            raise ValueError("q must be a scalar or a 1D tensor matching parameter_tensor")
+        if torch.any(mu <= 0):
+            raise ValueError("mu must be positive")
+        if torch.any(sigma <= 0):
+            raise ValueError("sigma must be positive")
+        if torch.any(q < 0):
+            raise ValueError("q must be non-negative")
 
-        return y_cdf
+        # Handle q == 0 by slightly elevating it, then manually assigning it zero at the end of calculations
+        positive_q = q > 0
+        q = q.clamp_min(torch.finfo(q.dtype).tiny)
+
+        z = torch.empty_like(mu)
+        z[nu != 0] = (((q[nu != 0] / mu[nu != 0])**nu[nu != 0] - 1) / (nu[nu != 0] * sigma[nu != 0]))
+        z[nu == 0] = torch.log(q[nu == 0] / mu[nu == 0]) / sigma[nu == 0]
+
+        phi = torch.special.ndtr(z)
+
+        a = torch.zeros_like(nu)
+        a[nu > 0] = torch.special.ndtr(-1/(sigma[nu > 0] * torch.abs(nu[nu > 0])))
+
+        b = torch.ones_like(nu)
+        b[nu != 0] = torch.special.ndtr(1/(sigma[nu != 0] * torch.abs(nu[nu != 0])))
+
+        fY = (phi - a)/b
+        fY = torch.where(positive_q, fY, 0.0)
+
+        return fY
+
 
     @classmethod
     def icdf(cls, parameter_tensor, p):
 
+        '''Takes a cumulative probability and returns the associated y-value.'''
+
         cls._verify_input_shapes(parameter_tensor, p)
 
-        if not isinstance(p, torch.Tensor):
-            p = torch.tensor(p)
+        mu = parameter_tensor[:,0]
+        sigma = parameter_tensor[:,1]
+        nu = parameter_tensor[:,2]
 
-        mu = parameter_tensor[:, 0]
-        sigma = parameter_tensor[:, 1]
-        nu = parameter_tensor[:, 2]
+        p = torch.as_tensor(p)
 
-        normal = torch_normal(0, 1)
-        z = normal.icdf(p)
+        if p.ndim == 0:
+            p = p.expand_as(mu)
+        elif p.shape != mu.shape:
+            raise ValueError("p must be a scalar or have shape (N,).")
+        if torch.any((p < 0) | (p > 1)):
+            raise ValueError("Probabilities must be in [0, 1].")
 
-        bracket_term = 1 + sigma * nu * z
-        bracket_term = torch.clamp(bracket_term, min=1e-6)
-        
-        y_icdf = torch.where(nu == 0, mu * torch.exp(sigma * z), mu * (bracket_term)**(1/nu))
+        z = torch.empty_like(nu)
+        z[nu <= 0] = cls.standard_normal.icdf(p[nu <= 0] * cls.standard_normal.cdf(1/(sigma[nu <= 0] * torch.abs(nu[nu <= 0]))))
+        z[nu > 0] = cls.standard_normal.icdf(1 - (1 - p[nu > 0]) * cls.standard_normal.cdf(1/(sigma[nu > 0] * torch.abs(nu[nu > 0]))))
 
-        return y_icdf
+        y = torch.empty_like(nu)
+        y[nu != 0] = mu[nu != 0] * ((nu[nu != 0] * sigma[nu != 0] * z[nu != 0] + 1)**(1/nu[nu != 0]))
+        y[nu == 0] = mu[nu == 0] * torch.exp(sigma[nu == 0] * z[nu == 0])
+
+        y[p == 0] = 0.0
+        y[p == 1] = float("inf")
+
+        return y
+
+
 
     @classmethod
     def sample(cls, parameter_tensor):
 
         cls._verify_input_shapes(parameter_tensor)
-
-        sample_size = parameter_tensor.shape[0]
-        probabilities = torch.rand(sample_size)
-
-        return cls.icdf(parameter_tensor, probabilities)
