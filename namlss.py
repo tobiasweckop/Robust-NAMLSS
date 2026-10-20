@@ -118,7 +118,7 @@ class NAMLSS(nn.Module):
         # check, if too many constant parameters are provided
         if len(global_param_indices) >= total_parameter_count:
             raise ValueError(f"Number of constant parameters ({len(global_param_indices)}) must be less than total parameters for the distribution ({total_parameter_count}).")
-        
+
         # check, if constant parameter indices are valid
         if any(parameter_index >= total_parameter_count or parameter_index < 0 for parameter_index in global_param_indices):
             raise ValueError(f"Parameter positions must be between 1 and {total_parameter_count}.")
@@ -249,8 +249,8 @@ class NAMLSS(nn.Module):
         return parameter_estimate_tensor
 
 
-    def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
-            early_stopping_patience = 10, c = None, starting_weights = None, verbose = False):
+    def fit_debug(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
+            early_stopping_patience = 10, c = None, starting_weights = None, observation_weights = None, verbose = False):
         ''' 
         Expects raw covariates and response. Standardizes X internally before optimizing.
         If validation data are provided, early stopping is used.
@@ -269,15 +269,18 @@ class NAMLSS(nn.Module):
             # Set model to training mode
             self.train()
 
+            # DEBUG ONLY
+            with torch.autograd.detect_anomaly():
             # Forward pass and loss computation
-            parameter_tensor = self._forward(X_train_standardized)
+                parameter_tensor = self._forward(X_train_standardized)
 
-            train_loss = self.distribution.nll_loss(parameter_tensor, y_train, c)
+                train_loss = self.distribution.nll_loss(parameter_tensor, y_train, c, observation_weights)
 
-            # Backward pass and optimization
-            optimizer.zero_grad()
-            train_loss.backward()
-            optimizer.step()
+                # Backward pass and optimization
+                optimizer.zero_grad()
+                train_loss.backward()
+                optimizer.step()
+            # END OF DEBUG BLOCK
 
             val_loss = None
             if X_val is not None and y_val is not None:
@@ -289,7 +292,7 @@ class NAMLSS(nn.Module):
                     parameter_validation_tensor = self._forward(X_val_standardized)
                     # full_parameter_validation_tensor = self._assemble_full_parameter_tensor(free_parameter_validation_tensor, self.global_parameter_dict)
 
-                val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c).item()
+                val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c, observation_weights).item()
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -310,8 +313,9 @@ class NAMLSS(nn.Module):
         return self
 
 
-    def fit_batches(self, X_train, y_train, X_val=None, y_val=None, max_epochs=10000, lr=5e-3, weight_decay=0.0, 
-                    early_stopping_patience=10, c=None, starting_weights=None, verbose=False, batch_size=None, shuffle=True):
+    def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
+                    early_stopping_patience = 10, c = None, starting_weights = None, observation_weights = None, verbose = False, 
+                    batch_size = None, shuffle = False):
         '''
         Expects raw covariates and response. Standardizes X internally before optimizing.
         If validation data are provided, early stopping is used.
@@ -355,7 +359,7 @@ class NAMLSS(nn.Module):
             if train_loader is None:
 
                 parameter_tensor = self._forward(X_train_standardized)
-                train_loss = self.distribution.nll_loss(parameter_tensor, y_train, c)
+                train_loss = self.distribution.nll_loss(parameter_tensor, y_train, c, observation_weights)
 
                 optimizer.zero_grad()
                 train_loss.backward()
@@ -370,7 +374,7 @@ class NAMLSS(nn.Module):
                 for X_batch, y_batch in train_loader:
 
                     parameter_tensor = self._forward(X_batch)
-                    batch_loss = self.distribution.nll_loss(parameter_tensor, y_batch, c)
+                    batch_loss = self.distribution.nll_loss(parameter_tensor, y_batch, c, observation_weights)
 
                     optimizer.zero_grad()
                     batch_loss.backward()
@@ -391,7 +395,7 @@ class NAMLSS(nn.Module):
 
                     parameter_validation_tensor = self._forward(X_val_standardized)
 
-                    val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c).item()
+                    val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c, observation_weights).item()
 
 
                 if val_loss < best_val_loss:
@@ -423,7 +427,8 @@ class NAMLSS(nn.Module):
         return self
     
 
-    def robust_fit(self, X_train, y_train, X_val, y_val, central_proportion = 0.95, penalty_list = None, max_epochs = 10000, verbose = False, batch_size = None, plot = False):
+    def robust_fit(self, X_train, y_train, X_val = None, y_val = None, central_proportion = 0.95, penalty_list = None, 
+                   max_epochs = 10000, observation_weights = None, verbose = False, batch_size = None, plot = False):
 
         if y_train.ndim == 2:
             assert y_train.shape[1] == 1
@@ -441,13 +446,16 @@ class NAMLSS(nn.Module):
         best_mse = float("inf")
         self.penalty_mse_dict = {}
 
-        candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list = self.global_param_list, hidden_size = self.hidden_size)
+        candidate_model = NAMLSS(formula=self.formula, 
+                                 distribution=self.distribution.__name__, 
+                                 numeric_mask = self.numeric_mask,
+                                 global_param_list = self.global_param_list, 
+                                 hidden_size = self.hidden_size)
 
         for penalty_candidate in penalty_list:
 
             # Fit the model
-            candidate_model.fit_batches(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
-            # candidate_model.fit_batches(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
+            candidate_model.fit(X_train, y_train, X_val, y_val, c = penalty_candidate, max_epochs = max_epochs, batch_size = batch_size)
 
             # Predict parameters based on validation data
             parameter_tensor = candidate_model.predict_parameters(X_val)
@@ -501,7 +509,8 @@ class NAMLSS(nn.Module):
             self.plot_PIT(X_val, y_val, central_proportion)
 
 
-    def robust_fit_grid(self, X_train, y_train, X_val, y_val, central_proportion_list=None, penalty_list=None, max_epochs=10000, verbose=False, batch_size=None, plot=False):
+    def robust_fit_grid(self, X_train, y_train, X_val = None, y_val = None, central_proportion_list=None, penalty_list=None, 
+                        max_epochs=10000, observation_weights = None, verbose=False, batch_size=None, plot=False):
 
         ''' 
         Evaluates PIT performance for a list of robustness penalties across multiple central_proportion values.
@@ -541,11 +550,15 @@ class NAMLSS(nn.Module):
             if verbose:
                 print(f"\n===== Central proportion = {central_proportion:.2f} =====")
 
-            candidate_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list=self.global_param_list, hidden_size=self.hidden_size)
+            candidate_model = NAMLSS(formula=self.formula, 
+                                     distribution=self.distribution.__name__, 
+                                     numeric_mask=self.numeric_mask,
+                                     global_param_list=self.global_param_list, 
+                                     hidden_size=self.hidden_size)
 
             for penalty_candidate in penalty_list:
 
-                candidate_model.fit_batches(X_train, y_train, X_val, y_val, c=penalty_candidate, max_epochs=max_epochs, batch_size=batch_size)
+                candidate_model.fit(X_train, y_train, X_val, y_val, c=penalty_candidate, max_epochs=max_epochs, batch_size=batch_size)
 
                 parameter_tensor = candidate_model.predict_parameters(X_val)
 
@@ -651,9 +664,13 @@ class NAMLSS(nn.Module):
 
         ########## Fit final model using selected c ##########
 
-        final_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list=self.global_param_list, hidden_size=self.hidden_size)
+        final_model = NAMLSS(formula=self.formula,
+                             distribution=self.distribution.__name__, 
+                             numeric_mask=self.numeric_mask,
+                             global_param_list=self.global_param_list, 
+                             hidden_size=self.hidden_size)
 
-        final_model.fit_batches(X_train, y_train, X_val, y_val, c=final_c, max_epochs=max_epochs, batch_size=batch_size)
+        final_model.fit(X_train, y_train, X_val, y_val, c=final_c, max_epochs=max_epochs, batch_size=batch_size)
 
         best_state_dict = final_model._snapshot_model_state()
 
