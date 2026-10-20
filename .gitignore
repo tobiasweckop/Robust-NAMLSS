@@ -167,3 +167,8 @@ paper 2/hemoglobin_female_best_relative_regret c = 0.6.png
 paper 2/hemoglobin_female_preprocessed.png
 paper 2/namlss.py
 paper 2/QQ-MSE and relative regret.png
+paper 2/Female Hemoglobin, Patients with Multiple Measurements.png
+paper 2/Female Hemoglobin, Patients with Single Measurements.png
+paper 2/full_model_bccg_qq_mse.png
+paper 2/Male Hemoglobin, Patients with Multiple Measurements.png
+paper 2/Male Hemoglobin, Patients with Single Measurements.png
