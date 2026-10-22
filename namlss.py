@@ -15,15 +15,17 @@ class NAMLSS(nn.Module):
         Initializes the NAMLSS model.
 
         Arguments:
-            formula (str): A string specifying the formula for the model. If None, a default formula will be generated based on n_covariates.
+            formula (str): A string specifying the formula for the model. If None, a default formula will be generated based on n_covariates. 
+            Note: The formula uses zero-based indexing (e.g. the first covariate has index 0)
 
             n_covariates (int): The number of covariates. Required if formula is None.
 
             distribution (str): The name of the distribution to model. Must be a key in Distribution.registry.
 
-            numeric_mask (torch.BoolTensor): A boolean tensor indicating which covariates are numeric and should be standardized. If None, all covariates are assumed to be numeric.
+            numeric_mask (torch.BoolTensor): A boolean tensor indicating which covariates are numeric and should be standardized. If None is given, all covariates are assumed to be numeric.
 
             global_param_list (list): A list of parameter indices that should be learned as constant. If None, all parameters are learned.
+            Note: This also uses zero-based indexing (e.g. The first parameter has index 0).
             
             hidden_size (int): The number of hidden units in each submodule.
         
@@ -44,7 +46,7 @@ class NAMLSS(nn.Module):
 
         # build modules based on the amount of freely learnable parameters
         self.global_param_list = global_param_list or []
-        self.global_param_indices = torch.tensor(sorted(self.global_param_list)) - 1
+        self.global_param_indices = torch.tensor(sorted(self.global_param_list))
         self.free_param_indices = torch.tensor([i for i in range(self.distribution.get_param_count()) if i not in self.global_param_indices])
         self.free_parameter_count = self._get_free_parameters(self.global_param_indices)
         self.module_dict = self._build_modules(self.terms, hidden_size, self.free_parameter_count)
@@ -56,6 +58,8 @@ class NAMLSS(nn.Module):
 
 
     def _resolve_distribution(self, distribution):
+        ''' Checks, if the distribution argument that was given to the constructor is valid.'''
+
         if distribution is None:
             raise ValueError(f"Distribution must be specified. Available distributions: {list(Distribution.registry.keys())}.")
 
@@ -66,6 +70,12 @@ class NAMLSS(nn.Module):
 
 
     def _check_formula(self, formula, n_covariates):
+        '''
+        Checks, if a formula has been given to the network. 
+        If not, tries to use n_covariates to generate a formula. 
+        Throws an exception if neither, n_covariates nor formula, exist.
+        '''
+
         if formula is None:
             if n_covariates is None:
                 raise ValueError("Either 'formula' or 'n_covariates' must be provided.")
@@ -80,6 +90,7 @@ class NAMLSS(nn.Module):
 
 
     def _parse_formula(self, formula):
+        '''Converts the formula argument into a list of terms to create the modules' subnetworks.'''
 
         parsed_terms = []
         terms = formula.split("+")
@@ -93,6 +104,7 @@ class NAMLSS(nn.Module):
 
 
     def _build_modules(self, terms, hidden_size, free_parameter_count):
+        '''Builds the network according to the terms created by _parse_formula().'''
 
         module_dict = nn.ModuleDict()
 
@@ -112,6 +124,7 @@ class NAMLSS(nn.Module):
 
 
     def _get_free_parameters(self, global_param_indices):
+        '''Checks, if the given list of global parameters is valid, and if so, returns the number of non-constant distribution parameters.'''
 
         total_parameter_count = self.distribution.get_param_count()
 
@@ -121,7 +134,7 @@ class NAMLSS(nn.Module):
 
         # check, if constant parameter indices are valid
         if any(parameter_index >= total_parameter_count or parameter_index < 0 for parameter_index in global_param_indices):
-            raise ValueError(f"Parameter positions must be between 1 and {total_parameter_count}.")
+            raise ValueError(f"Parameter positions must be between 0 and {total_parameter_count - 1}.")
         
         # check, if constant parameter indices are unique
         if len(set(global_param_indices)) != len(global_param_indices):
@@ -134,19 +147,17 @@ class NAMLSS(nn.Module):
 
 
     def _register_global_parameters(self, global_param_indices):
+        '''Registers global parameters as scalars with the optimizer.'''
 
         param_names = [str(param.item()) for param in global_param_indices]
 
-        # global_node_dict = nn.ParameterDict({param_name: nn.Parameter(torch.zeros(1)) for param_name in param_names})
         global_node_dict = nn.ParameterDict({param_name: nn.Parameter(torch.ones(1)) for param_name in param_names})
 
         return global_node_dict
 
 
     def _prepare_inputs(self, X_train, y_train = None, X_val = None, y_val = None, starting_weights = None, c = None):
-        ''' 
-        Takes raw covariates, gives them the correct shapes and standardizes X.
-        '''
+        '''Takes raw covariates, gives them the correct shapes and standardizes X.'''
 
         # Load starting weights if provided
         if starting_weights is not None:
@@ -174,9 +185,7 @@ class NAMLSS(nn.Module):
 
 
     def _standardize_covariates(self, X_train, X_val = None):
-        '''
-        Takes raw covariates and standardizes them.
-        '''
+        '''Takes raw covariates and returns their z-standardized version.'''
 
         if self.numeric_mask is None:
             self.numeric_mask = torch.ones(X_train.shape[1], dtype=torch.bool)
@@ -205,10 +214,18 @@ class NAMLSS(nn.Module):
 
 
     def _snapshot_model_state(self):
+        '''Returns a copy of the model's current state dictionary.'''
+
         return {key : value.detach().clone() for key, value in self.state_dict().items()}
 
 
     def _assemble_full_parameter_tensor(self, free_parameter_tensor, global_parameter_dict):
+        '''
+        Checks, if global parameters exist. 
+        If so, transforms them from scalars into vectors.
+        Assembles all parameter estimates into a parameter_tensor object.
+        Returns the full parameter_tensor object.
+        '''
 
         if global_parameter_dict is None or len(global_parameter_dict) == 0:
             return free_parameter_tensor
@@ -235,6 +252,7 @@ class NAMLSS(nn.Module):
         # output: list of [observations x parameters] matrices
         component_outputs = [self.module_dict[key](X_standardized[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
 
+        # adds global parameters into the parameter tensor, if any exist
         full_component_parameter_tensor_list = [self._assemble_full_parameter_tensor(component_output, self.global_parameter_dict) for component_output in component_outputs]
 
         # [observations x submodules x parameters]
@@ -314,8 +332,8 @@ class NAMLSS(nn.Module):
 
 
     def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
-                    early_stopping_patience = 10, c = None, starting_weights = None, observation_weights = None, verbose = False, 
-                    batch_size = None, shuffle = False):
+            early_stopping_patience = 10, c = None, starting_weights = None, observation_weights = None, verbose = False, 
+            batch_size = None, shuffle = False):
         '''
         Expects raw covariates and response. Standardizes X internally before optimizing.
         If validation data are provided, early stopping is used.
@@ -394,7 +412,6 @@ class NAMLSS(nn.Module):
                 with torch.no_grad():
 
                     parameter_validation_tensor = self._forward(X_val_standardized)
-
                     val_loss = self.distribution.nll_loss(parameter_validation_tensor, y_val, c, observation_weights).item()
 
 
@@ -418,7 +435,6 @@ class NAMLSS(nn.Module):
 
             if epoch % 100 == 0 and verbose:
                 if val_loss is not None:
-
                     print(f"Epoch {epoch} - Train Loss: {train_loss_value:.4f} - Val Loss: {val_loss:.4f}")
 
                 else:
@@ -509,8 +525,8 @@ class NAMLSS(nn.Module):
             self.plot_PIT(X_val, y_val, central_proportion)
 
 
-    def robust_fit_grid(self, X_train, y_train, X_val = None, y_val = None, central_proportion_list=None, penalty_list=None, 
-                        max_epochs=10000, observation_weights = None, verbose=False, batch_size=None, plot=False):
+
+    def robust_fit_grid(self, X_train, y_train, X_val = None, y_val = None, central_proportion_list=None, penalty_list=None, max_epochs=10000, verbose=False, batch_size=None, plot=False):
 
         ''' 
         Evaluates PIT performance for a list of robustness penalties across multiple central_proportion values.
@@ -550,9 +566,8 @@ class NAMLSS(nn.Module):
             if verbose:
                 print(f"\n===== Central proportion = {central_proportion:.2f} =====")
 
-            candidate_model = NAMLSS(formula=self.formula, 
+            candidate_model = NAMLSS(formula = self.formula, 
                                      distribution=self.distribution.__name__, 
-                                     numeric_mask=self.numeric_mask,
                                      global_param_list=self.global_param_list, 
                                      hidden_size=self.hidden_size)
 
@@ -664,11 +679,7 @@ class NAMLSS(nn.Module):
 
         ########## Fit final model using selected c ##########
 
-        final_model = NAMLSS(formula=self.formula,
-                             distribution=self.distribution.__name__, 
-                             numeric_mask=self.numeric_mask,
-                             global_param_list=self.global_param_list, 
-                             hidden_size=self.hidden_size)
+        final_model = NAMLSS(n_covariates=X_train.shape[1], distribution=self.distribution.__name__, global_param_list=self.global_param_list, hidden_size=self.hidden_size)
 
         final_model.fit(X_train, y_train, X_val, y_val, c=final_c, max_epochs=max_epochs, batch_size=batch_size)
 
