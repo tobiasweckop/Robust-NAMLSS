@@ -450,7 +450,7 @@ class BCCG(Distribution):
     @classmethod
     def cdf(cls, parameter_tensor, q):
 
-        #TODO: handle q == 0 correctly. I really dont want to implement this right now, but it should be done at some point.
+        #TODO: handle q == 0 correctly.
 
         cls._verify_input_shapes(parameter_tensor)
 
