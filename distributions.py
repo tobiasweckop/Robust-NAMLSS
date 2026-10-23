@@ -23,7 +23,7 @@ class Distribution:
 
 
     @classmethod
-    def _verify_input_shapes(cls, parameter_tensor, vector = None):
+    def _verify_input_shapes(cls, parameter_tensor = None, vector = None):
 
         if parameter_tensor.ndim != 2:
             raise ValueError(
@@ -46,6 +46,18 @@ class Distribution:
 
             if parameter_tensor.shape[0] != vector.shape[0]:
                 raise ValueError("Batch sizes do not match.")
+
+    @classmethod
+    def initial_values(cls, y):
+
+        raise NotImplementedError("initial_values() is not yet implemented for this distribution.")
+
+    @staticmethod
+    def _inverse_softplus(x):
+
+        x = max(float(x), 1e-5)
+
+        return math.log(math.expm1(x))
                 
 
 
@@ -66,6 +78,16 @@ class Normal(Distribution):
         transformed_tensor = torch.stack([mu, sigma], dim=2)
 
         return transformed_tensor
+
+
+    @classmethod
+    def initial_values(cls, y):
+        mu = y.mean().item()
+        sigma = y.std(unbiased=False).clamp_min(1e-5).item()
+
+        sigma_raw = cls._inverse_softplus(sigma)
+
+        return mu, sigma_raw
 
 
     @classmethod
@@ -395,6 +417,28 @@ class BCCG(Distribution):
     def get_param_count(cls):
         return 3
 
+
+    @classmethod
+    def initial_values(cls, y):
+
+        if torch.any(y <= 0):
+            raise ValueError("BCCG requires strictly positive targets.")
+
+        # Positive location baseline
+        mu = y.median().clamp_min(1e-5)
+
+        # Approximate coefficient of variation
+        sigma = (y.std(unbiased=False) / y.mean().clamp_min(1e-5)).clamp_min(1e-5)
+
+        # Initial skewness parameter
+        nu = 0
+
+        # Return raw values, since transform() applies softplus
+        mu_raw = cls._inverse_softplus(mu.item())
+        sigma_raw = cls._inverse_softplus(sigma.item())
+
+        return mu_raw, sigma_raw, nu
+
     
     @classmethod
     def transform(cls, stacked_parameter_tensor):
@@ -450,7 +494,7 @@ class BCCG(Distribution):
     @classmethod
     def cdf(cls, parameter_tensor, q):
 
-        #TODO: handle q == 0 correctly.
+        #TODO: handle q == 0 correctly. I really dont want to implement this right now, but it should be done at some point.
 
         cls._verify_input_shapes(parameter_tensor)
 
