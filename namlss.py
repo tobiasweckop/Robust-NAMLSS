@@ -215,8 +215,52 @@ class NAMLSS(nn.Module):
 
     def _snapshot_model_state(self):
         '''Returns a copy of the model's current state dictionary.'''
-
         return {key : value.detach().clone() for key, value in self.state_dict().items()}
+
+
+    def _initialize_parameters(self, y):
+        """Initialize subnetworks to produce sensible baseline predictions.
+
+        Each distribution provides raw initial parameter values through
+        its initial_values(y) method. The baseline for each free parameter
+        is divided evenly across all subnetworks.
+        """
+        initial_values = self.distribution.initial_values(y)
+
+        n_modules = len(self.module_dict)
+        if n_modules == 0:
+            raise ValueError("Cannot initialize NAMLSS without any subnetworks.")
+
+
+        if len(initial_values) != self.distribution.get_param_count():
+            raise ValueError(
+                f"{self.distribution.__name__}.initial_values(y) must return "
+                f"{self.distribution.get_param_count()} raw parameter values; "
+                f"got {len(initial_values)}."
+            )
+
+        free_indices = self.free_param_indices.tolist()
+        global_indices = self.global_param_indices.tolist()
+
+        with torch.no_grad():
+            # Initialize each subnetwork to a constant output.
+            for module in self.module_dict.values():
+                final_layer = module[-1]
+                final_layer.weight.zero_()
+                final_layer.bias.zero_()
+
+            # Distribute each free parameter's baseline evenly across
+            # the subnetworks. Each output channel is initialized separately.
+            for module in self.module_dict.values():
+                bias = module[-1].bias
+
+                for output_idx, parameter_idx in enumerate(free_indices):
+                    bias[output_idx] = (initial_values[parameter_idx] / n_modules)
+
+            # Global parameters are added separately in _forward(),
+            # so initialize them directly to their raw baseline values.
+            for parameter_idx in global_indices:
+                self.global_parameter_dict[str(parameter_idx)].fill_(initial_values[parameter_idx])
 
 
     def _assemble_full_parameter_tensor(self, free_parameter_tensor, global_parameter_dict):
@@ -252,22 +296,19 @@ class NAMLSS(nn.Module):
         # output: list of [observations x parameters] matrices
         component_outputs = [self.module_dict[key](X_standardized[:, tuple(int(i) for i in key.split('*'))]) for key in self.module_dict.keys()]
 
-        # adds global parameters into the parameter tensor, if any exist
-        full_component_parameter_tensor_list = [self._assemble_full_parameter_tensor(component_output, self.global_parameter_dict) for component_output in component_outputs]
+        # Sum free raw parameter outputs across components
+        summed_free_parameters = torch.stack(component_outputs, dim=1).sum(dim=1)
 
-        # [observations x submodules x parameters]
-        stacked_array = torch.stack(full_component_parameter_tensor_list, dim = 1)
+        # Add global parameters once
+        full_parameters = self._assemble_full_parameter_tensor(summed_free_parameters, self.global_parameter_dict)
 
-        # apply distribution specific transformations to get final parameter vectors
-        transformed_parameter_tensor = self.distribution.transform(stacked_array)
+        # Transform only after all raw parameters have been assembled
+        transformed_parameters = self.distribution.transform(full_parameters.unsqueeze(1)) #TODO: Clean this up
 
-        # sums over submodules to get final parameter estimates for each distribution parameter
-        parameter_estimate_tensor = torch.sum(transformed_parameter_tensor, dim = 1)
-
-        return parameter_estimate_tensor
+        return transformed_parameters[:, 0, :] #TODO: Clean this up
 
 
-    def fit_debug(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
+    def fit_debug(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 1e-3, weight_decay = 0.0, 
             early_stopping_patience = 10, c = None, starting_weights = None, observation_weights = None, verbose = False):
         ''' 
         Expects raw covariates and response. Standardizes X internally before optimizing.
@@ -331,8 +372,8 @@ class NAMLSS(nn.Module):
         return self
 
 
-    def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 5e-3, weight_decay = 0.0, 
-            early_stopping_patience = 10, c = None, starting_weights = None, observation_weights = None, verbose = False, 
+    def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 1e-3, weight_decay = 0.0, 
+            early_stopping_patience = 50, c = None, starting_weights = None, observation_weights = None, verbose = False, 
             batch_size = None, shuffle = False):
         '''
         Expects raw covariates and response. Standardizes X internally before optimizing.
@@ -349,6 +390,10 @@ class NAMLSS(nn.Module):
         # Prepare inputs
         X_train_standardized, y_train, X_val_standardized, y_val, c = (self._prepare_inputs(X_train, y_train, X_val, y_val, starting_weights, c))
         self.chosen_c = c
+
+        # Give the network distribution-specific starting weights based on y
+        if starting_weights is None:
+            self._initialize_parameters(y_train)
 
         # Set up optimizer
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
@@ -526,7 +571,8 @@ class NAMLSS(nn.Module):
 
 
 
-    def robust_fit_grid(self, X_train, y_train, X_val = None, y_val = None, central_proportion_list=None, penalty_list=None, max_epochs=10000, verbose=False, batch_size=None, plot=False):
+    def robust_fit_grid(self, X_train, y_train, X_val = None, y_val = None, central_proportion_list=None, 
+                        penalty_list=None, max_epochs=10000, verbose=False, plot=False, batch_size=None):
 
         ''' 
         Evaluates PIT performance for a list of robustness penalties across multiple central_proportion values.
@@ -556,6 +602,13 @@ class NAMLSS(nn.Module):
         self.best_c_by_central_proportion = {}
         self.best_mse_by_central_proportion = {}
 
+        candidate_model = NAMLSS(formula = self.formula, 
+                                distribution=self.distribution.__name__, 
+                                global_param_list=self.global_param_list, 
+                                hidden_size=self.hidden_size)
+
+        previous_model_weights = None
+
         for central_proportion in central_proportion_list:
 
             self.penalty_mse_dict[central_proportion] = {}
@@ -566,14 +619,9 @@ class NAMLSS(nn.Module):
             if verbose:
                 print(f"\n===== Central proportion = {central_proportion:.2f} =====")
 
-            candidate_model = NAMLSS(formula = self.formula, 
-                                     distribution=self.distribution.__name__, 
-                                     global_param_list=self.global_param_list, 
-                                     hidden_size=self.hidden_size)
-
             for penalty_candidate in penalty_list:
 
-                candidate_model.fit(X_train, y_train, X_val, y_val, c=penalty_candidate, max_epochs=max_epochs, batch_size=batch_size)
+                candidate_model.fit(X_train, y_train, X_val, y_val, c=penalty_candidate, starting_weights = previous_model_weights, max_epochs=max_epochs, batch_size=batch_size)
 
                 parameter_tensor = candidate_model.predict_parameters(X_val)
 
@@ -599,6 +647,8 @@ class NAMLSS(nn.Module):
                 if qq_mse.item() < best_mse:
                     best_mse = qq_mse.item()
                     best_penalty = penalty_candidate
+
+                previous_model_weights = candidate_model.state_dict()
 
             self.best_c_by_central_proportion[central_proportion] = best_penalty
             self.best_mse_by_central_proportion[central_proportion] = best_mse
