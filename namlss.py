@@ -375,6 +375,7 @@ class NAMLSS(nn.Module):
     def fit(self, X_train, y_train, X_val = None, y_val = None, max_epochs = 10000, lr = 1e-3, weight_decay = 0.0, 
             early_stopping_patience = 50, c = None, starting_weights = None, observation_weights = None, verbose = False, 
             batch_size = None, shuffle = False):
+        
         '''
         Expects raw covariates and response. Standardizes X internally before optimizing.
         If validation data are provided, early stopping is used.
@@ -401,7 +402,11 @@ class NAMLSS(nn.Module):
         # Create batches
         if batch_size is not None:
 
-            train_dataset = torch.utils.data.TensorDataset(X_train_standardized, y_train)
+            if observation_weights is not None:
+                train_dataset = torch.utils.data.TensorDataset(X_train_standardized, y_train, observation_weights)
+            else:
+                train_dataset = torch.utils.data.TensorDataset(X_train_standardized, y_train)
+            
             train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
             train_dataset_size = len(train_dataset)
 
@@ -434,10 +439,16 @@ class NAMLSS(nn.Module):
             else:
                 epoch_loss = 0.0
 
-                for X_batch, y_batch in train_loader:
+                for batch in train_loader:
+
+                    if observation_weights is not None:
+                        X_batch, y_batch, observation_weights_batch = batch
+                    else:
+                        X_batch, y_batch = batch
+                        observation_weights_batch = None
 
                     parameter_tensor = self._forward(X_batch)
-                    batch_loss = self.distribution.nll_loss(parameter_tensor, y_batch, c, observation_weights)
+                    batch_loss = self.distribution.nll_loss(parameter_tensor, y_batch, c, observation_weights_batch)
 
                     optimizer.zero_grad()
                     batch_loss.backward()
@@ -492,8 +503,8 @@ class NAMLSS(nn.Module):
         return self
 
 
-    def robust_fit_grid(self, X_train, y_train, X_val = None, y_val = None, central_proportion_list = None, 
-                            penalty_list = None, max_epochs = 10000, verbose = False, plot = False, batch_size = None):
+    def robust_fit_grid(self, X_train, y_train, X_val = None, y_val = None, central_proportion_list = None, penalty_list = None, 
+                        criterion = "max", max_epochs = 10000, verbose = False, plot = False, batch_size = None):
 
             ''' 
             Evaluates PIT performance for a list of robustness penalties across multiple central_proportion values.
@@ -583,68 +594,34 @@ class NAMLSS(nn.Module):
                 for central_proportion in central_proportion_list:
                     print(f"Central proportion = {central_proportion:.2f} | Best c = {self.best_c_by_central_proportion[central_proportion]} | QQ-MSE = {self.best_mse_by_central_proportion[central_proportion]:.6f}")
 
-            ########## Calculate relative regret ##########
+            mse_matrix = np.array([
+                [
+                    self.penalty_mse_dict[central_proportion][("No penalty" if c is None else c)]
+                    for c in penalty_list
+                ]
+                for central_proportion in central_proportion_list
+            ])
 
-            common_c_values = None
-            regret_matrix = []
+            # find the c with the lowest maximum QQ-MSE across the central proportions
+            lowest_max_mse = np.min(np.max(mse_matrix, axis=0))
+            c_lowest_max_mse = penalty_list[np.argmin(np.max(mse_matrix, axis=0))]
 
-            for central_proportion in central_proportion_list:
+            c_lowest_mean_mse = penalty_list[np.argmin(np.mean(mse_matrix, axis=0))]
+            c_lowest_median_mse = penalty_list[np.argmin(np.median(mse_matrix, axis=0))]
 
-                c_values = []
-                mse_values = []
+            final_c = c_lowest_max_mse
 
-                for penalty_name, mse in self.penalty_mse_dict[central_proportion].items():
+            print(f"\n Lowest maximum QQ-MSE across central proportions: {lowest_max_mse:.6f} at c = {c_lowest_max_mse}")
 
-                    if penalty_name == "No penalty":
-                        continue
-
-                    c_values.append(float(penalty_name))
-                    mse_values.append(mse)
-
-                order = np.argsort(c_values)
-
-                c_values = np.array(c_values)[order]
-                mse_values = np.array(mse_values)[order]
-
-                if common_c_values is None:
-                    common_c_values = c_values
-                else:
-                    assert np.array_equal(common_c_values, c_values), "Penalty grids differ between central proportions."
-
-                minimum_mse = np.min(mse_values)
-
-                relative_regret = mse_values / minimum_mse
-
-                regret_matrix.append(relative_regret)
-
-            regret_matrix = np.array(regret_matrix)
-
-            self.relative_regret_matrix = regret_matrix
-            self.relative_regret_c_values = common_c_values
-
-            self.mean_relative_regret = np.mean(regret_matrix, axis=0)
-            self.median_relative_regret = np.median(regret_matrix, axis=0)
-
-            best_mean_c = common_c_values[np.argmin(self.mean_relative_regret)]
-            best_median_c = common_c_values[np.argmin(self.median_relative_regret)]
-
-            self.best_mean_regret_c = best_mean_c
-            self.best_median_regret_c = best_median_c
-
-            if abs(best_mean_c - best_median_c) >= 0.5:
-                print(f"\nWarning: Best c by mean relative regret ({best_mean_c:.1f}) and best c by median relative regret ({best_median_c:.1f}) differ by more than 0.5." 
-                      f"Consider refitting the model to achieve better agreement.")
-
-            ########## Choose final c using lowest median relative regret ##########
-
-            final_c = best_median_c
             self.chosen_c = final_c
 
-            if verbose:
-                print("\n===== Relative regret summary =====")
-                print(f"Best c by mean relative regret: c = {best_mean_c:.1f}")
-                print(f"Best c by median relative regret: c = {best_median_c:.1f}")
-                print(f"Final selected c: c = {final_c:.1f}")
+            print(f"Final selected c: c = {'No penalty' if final_c is None else f'{final_c:.1f}'}")
+
+            if final_c == max(number for number in penalty_list if isinstance(number, (int, float))):
+                print(f"\nWarning: The selected c = {final_c:.1f} is the maximum value in the penalty grid. Consider expanding the penalty grid to explore larger values of c.")
+
+            if final_c == min(number for number in penalty_list if isinstance(number, (int, float))):
+                print(f"\nWarning: The selected c = {final_c:.1f} is the minimum value in the penalty grid. Consider expanding the penalty grid to explore smaller values of c.")
 
 
             ########## Fit final model using selected c ##########
@@ -669,12 +646,7 @@ class NAMLSS(nn.Module):
 
             if plot:
 
-                import matplotlib.pyplot as plt
-
-                fig, axes = plt.subplots(2, 1, figsize=(10, 10))
-
-
-                ########## Plot 1: Raw QQ-MSE ##########
+                plt.figure(figsize=(10, 6))
 
                 for central_proportion in central_proportion_list:
 
@@ -694,39 +666,22 @@ class NAMLSS(nn.Module):
                     c_values = np.array(c_values)[order]
                     mse_values = np.array(mse_values)[order]
 
-                    axes[0].plot(c_values, mse_values, label=f"Central proportion = {central_proportion:.2f}")
+                    plt.plot(c_values, mse_values, label=f"Central proportion = {central_proportion:.2f}")
 
-                    best_c = self.best_c_by_central_proportion[central_proportion]
+                    best_c_per_proportion_marker = self.best_c_by_central_proportion[central_proportion]
 
-                    if best_c is not None:
-                        axes[0].scatter(best_c, self.best_mse_by_central_proportion[central_proportion], s=80)
+                    if best_c_per_proportion_marker is not None:
+                        plt.scatter(best_c_per_proportion_marker, self.best_mse_by_central_proportion[central_proportion], s=80)
 
-                axes[0].set_xlabel("Penalty c")
-                axes[0].set_ylabel("QQ-MSE")
-                axes[0].set_title("QQ-MSE across penalty values and central proportions")
-                axes[0].legend()
-                axes[0].grid(True, alpha=0.3)
+                plt.axvline(x = c_lowest_max_mse, color='grey', linestyle='--', linewidth = 2, label=f"Lowest max QQ-MSE c = {c_lowest_max_mse:.1f}")
+                plt.axvline(x = c_lowest_mean_mse, color='grey', linestyle=':', linewidth = 2, label=f"Lowest mean QQ-MSE c = {c_lowest_mean_mse:.1f}")
 
+                plt.xlabel("Penalty c")
+                plt.ylabel("QQ-MSE")
+                plt.title("QQ-MSE across penalty values and central proportions")
+                plt.legend()
+                plt.grid(True, alpha=0.3)
 
-                ########## Plot 2: Relative regret ##########
-
-                for i, central_proportion in enumerate(central_proportion_list):
-                    axes[1].plot(common_c_values, regret_matrix[i], label=f"Central proportion = {central_proportion:.2f}")
-
-                axes[1].plot(common_c_values, self.mean_relative_regret, color="black", linewidth=3, label="Mean relative regret")
-                axes[1].plot(common_c_values, self.median_relative_regret, color="black", linestyle="--", linewidth=2, label="Median relative regret")
-
-                axes[1].axvline(best_mean_c, color="black", linestyle=":", linewidth=2, label=f"Best mean regret: c = {best_mean_c:.1f}")
-                axes[1].axvline(best_median_c, color="gray", linestyle=":", linewidth=2, label=f"Best median regret: c = {best_median_c:.1f}")
-
-                axes[1].set_xlabel("Penalty c")
-                axes[1].set_ylabel("Relative QQ-MSE")
-                axes[1].set_title("Relative QQ-MSE across central proportions")
-                axes[1].legend()
-                axes[1].grid(True, alpha=0.3)
-
-                plt.tight_layout()
-                plt.show()
 
 
     def predict_parameters(self, X):
